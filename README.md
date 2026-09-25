@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # GmshCAD Studio
 
 Ambiente CAD 3D basato su **OpenCASCADE** (pythonocc-core) con integrazione
@@ -183,3 +184,7 @@ gb.mesh_step("modello.step", "modello.msh", clmax=4.0)   # meshing gmsh
   banale: usare trasformazioni/booleane o ricostruire la geometria.
 - Per mesh molto grandi la visualizzazione dei blocchi (compound di facce)
   è pensata per taglie da pre/post-processore, non per milioni di elementi.
+=======
+# SonOfBatch
+Another OpenSees Interface AI developed
+>>>>>>> 96e1bf1e7422a237d47fa12fd683cd40253f786a

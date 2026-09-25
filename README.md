@@ -1,3 +1,5 @@
+![SOB](SonOfBatch.png) </br>
+
 # GmshCAD Studio - *Son Of Batch*
 
 Ambiente CAD 3D generato totalmente con AI basato su **OpenCASCADE** (pythonocc-core) con integrazione

@@ -1,4 +1,4 @@
-# GmshCAD Studio *Son Of Batch
+# GmshCAD Studio *Son Of Batch*
 
 Ambiente CAD 3D generato totalmente con AI basato su **OpenCASCADE** (pythonocc-core) con integrazione
 completa di **Gmsh**: import di mesh `.msh`, selezione e raggruppamento

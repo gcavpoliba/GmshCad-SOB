@@ -1,7 +1,6 @@
-<<<<<<< HEAD
-# GmshCAD Studio
+# GmshCAD Studio *Son Of Batch
 
-Ambiente CAD 3D basato su **OpenCASCADE** (pythonocc-core) con integrazione
+Ambiente CAD 3D generato totalmente con AI basato su **OpenCASCADE** (pythonocc-core) con integrazione
 completa di **Gmsh**: import di mesh `.msh`, selezione e raggruppamento
 entità, modellazione B-Rep di punti/curve/superfici/solidi e meshing embedded.
 
@@ -185,6 +184,4 @@ gb.mesh_step("modello.step", "modello.msh", clmax=4.0)   # meshing gmsh
 - Per mesh molto grandi la visualizzazione dei blocchi (compound di facce)
   è pensata per taglie da pre/post-processore, non per milioni di elementi.
 =======
-# SonOfBatch
-Another OpenSees Interface AI developed
->>>>>>> 96e1bf1e7422a237d47fa12fd683cd40253f786a
+

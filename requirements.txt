@@ -1,0 +1,12 @@
+# Dipendenze pip di GmshCAD Studio.
+# ATTENZIONE 1: pythonocc-core NON è su PyPI: installarlo via conda-forge
+# (vedi environment.yml o README).
+# ATTENZIONE 2 (Windows): qt-main (dipendenza di pythonocc-core/vtk) può
+# entrare in conflitto con PySide6 installato via pip ("DLL load failed").
+# Su Windows è CONSIGLIATO PySide6 da conda-forge:
+#   conda install -c conda-forge pyside6
+# main.py prova comunque a mitigare il conflitto a runtime.
+PySide6>=6.5
+gmsh>=1.7
+numpy
+pytest

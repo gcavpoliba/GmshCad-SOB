@@ -1,0 +1,869 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..de76e2e
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++(empty)__pycache__/
++__pycache__/
+diff --git a/README.md b/README.md
+index 31f9263..b62f6f5 100644
+--- a/README.md
++++ b/README.md
+@@ -90,15 +90,18 @@ installare `libglu1-mesa libegl1` (Debian/Ubuntu) o impostare
+
+ **"PySide6 non installato: impossibile avviare la GUI"**
+ L'ambiente conda non contiene il pacchetto GUI (tipico se l'ambiente è stato
+-creato installando solo `pythonocc-core`). Con l'ambiente attivo:
++creato installando solo `pythonocc-core`). Con l'ambiente attivo, su Windows
++usa preferibilmente il pacchetto conda-forge (evita il conflitto DLL con
++`qt-main`, vedi la voce "DLL load failed" più sotto):
+
+ ```bat
+-:: Windows (PowerShell o cmd)
+-python -m pip install PySide6
++:: consigliato (conda-forge)
++conda install -c conda-forge pyside6
+ python main.py
+
+-:: alternativa senza pip
+-conda install -c conda-forge pyside6
++:: alternativa via pip (può dare "DLL load failed" in presenza di qt-main)
++python -m pip install PySide6
++python main.py
+ ```
+
+ **"ModuleNotFoundError: No module named 'gmsh'"**
+@@ -136,13 +139,15 @@ Rimedio definitivo: usare PySide6 di conda-forge invece di pip
+ ```bat
+ python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6
+ conda install -c conda-forge pyside6
+-python main.py --selfcheck     \(deve mostrare [✓] PySide6 \(QtWidgets\)\)
++python main.py --selfcheck     \(deve mostrare [✓] PySide6 \(QtWidgets\) ... [conda-forge]\)
+ python main.py
+ ```
+
+ main.py mitiga inoltre il conflitto a runtime (antepone la cartella di
+-PySide6 alla ricerca DLL), quindi l'ultima versione del progetto può
+-funzionare anche con PySide6 da pip.
++PySide6 alla ricerca DLL, solo quando PySide6 risulta installato via pip),
++quindi l'ultima versione del progetto può funzionare anche con PySide6 da
++pip. Se il rimedio sopra è stato applicato, il selfcheck mostra
++`[conda-forge]` e la mitigazione non è più necessaria.
+
+ Altri rimedi, se il primo non fosse sufficiente:
+
+diff --git a/environment.yml b/environment.yml
+index a959ae0..d3c1190 100644
+--- a/environment.yml
++++ b/environment.yml
+@@ -1,4 +1,4 @@
+-name: gmshcad2
++name: gmshcad
+ channels:
+   - conda-forge
+ dependencies:
+diff --git a/fix-pyside-dll.patch b/fix-pyside-dll.patch
+new file mode 100644
+index 0000000..f6c3826
+--- /dev/null
++++ b/fix-pyside-dll.patch
+@@ -0,0 +1,394 @@
++diff --git a/.gitignore b/.gitignore
++new file mode 100644
++index 0000000..de76e2e
++--- /dev/null
+++++ b/.gitignore
++@@ -0,0 +1,2 @@
+++(empty)__pycache__/
+++__pycache__/
++diff --git a/README.md b/README.md
++index 31f9263..b62f6f5 100644
++--- a/README.md
+++++ b/README.md
++@@ -90,15 +90,18 @@ installare `libglu1-mesa libegl1` (Debian/Ubuntu) o impostare
++
++ **"PySide6 non installato: impossibile avviare la GUI"**
++ L'ambiente conda non contiene il pacchetto GUI (tipico se l'ambiente è stato
++-creato installando solo `pythonocc-core`). Con l'ambiente attivo:
+++creato installando solo `pythonocc-core`). Con l'ambiente attivo, su Windows
+++usa preferibilmente il pacchetto conda-forge (evita il conflitto DLL con
+++`qt-main`, vedi la voce "DLL load failed" più sotto):
++
++ ```bat
++-:: Windows (PowerShell o cmd)
++-python -m pip install PySide6
+++:: consigliato (conda-forge)
+++conda install -c conda-forge pyside6
++ python main.py
++
++-:: alternativa senza pip
++-conda install -c conda-forge pyside6
+++:: alternativa via pip (può dare "DLL load failed" in presenza di qt-main)
+++python -m pip install PySide6
+++python main.py
++ ```
++
++ **"ModuleNotFoundError: No module named 'gmsh'"**
++@@ -136,13 +139,15 @@ Rimedio definitivo: usare PySide6 di conda-forge invece di pip
++ ```bat
++ python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6
++ conda install -c conda-forge pyside6
++-python main.py --selfcheck     \(deve mostrare [✓] PySide6 \(QtWidgets\)\)
+++python main.py --selfcheck     \(deve mostrare [✓] PySide6 \(QtWidgets\) ... [conda-forge]\)
++ python main.py
++ ```
++
++ main.py mitiga inoltre il conflitto a runtime (antepone la cartella di
++-PySide6 alla ricerca DLL), quindi l'ultima versione del progetto può
++-funzionare anche con PySide6 da pip.
+++PySide6 alla ricerca DLL, solo quando PySide6 risulta installato via pip),
+++quindi l'ultima versione del progetto può funzionare anche con PySide6 da
+++pip. Se il rimedio sopra è stato applicato, il selfcheck mostra
+++`[conda-forge]` e la mitigazione non è più necessaria.
++
++ Altri rimedi, se il primo non fosse sufficiente:
++
++diff --git a/environment.yml b/environment.yml
++index a959ae0..d3c1190 100644
++--- a/environment.yml
+++++ b/environment.yml
++@@ -1,4 +1,4 @@
++-name: gmshcad2
+++name: gmshcad
++ channels:
++   - conda-forge
++ dependencies:
++diff --git a/main.py b/main.py
++index 81e58fd..3a1d4d5 100644
++--- a/main.py
+++++ b/main.py
++@@ -17,15 +17,127 @@ import sys
++ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++
+++def _pyside_e_conda_forge() -> bool:
+++    """True se PySide6 proviene dal pacchetto conda-forge (non da pip).
+++
+++    Rilevamento: i pacchetti conda registrano l'history in
+++    <env>/conda-meta/pyside6-*.json; le installazioni pip hanno solo il
+++    dist-info dentro site-packages.
+++    """
+++    import glob
+++    try:
+++        import PySide6
+++    except Exception:
+++        return False
+++    env = os.path.dirname(os.path.dirname(sys.executable))
+++    if glob.glob(os.path.join(env, "conda-meta", "pyside6-*.json")):
+++        return True
+++    # fallback: percorso del pacchetto fuori da site-packages => non pip
+++    pkg = os.path.abspath(PySide6.__file__)
+++    return "site-packages" not in pkg.replace("\\", "/").lower()
+++
+++
+++def _bin_ambiente_conda() -> list:
+++    """Directory bin/DLL di tutti gli ambienti conda raggiunti dal PATH."""
+++    indesiderati = []
+++    visti = set()
+++    # ambiente attivo: da sys.prefix / base_prefix (copre anche `python main.py`
+++    # diretto, senza launcher) e da CONDA_PREFIX (altre eventuali attivazioni)
+++    candidati = []
+++    for prefisso in (sys.prefix, getattr(sys, "base_prefix", ""),
+++                    os.environ.get("CONDA_PREFIX", "")):
+++        if prefisso:
+++            candidati.append(prefisso)
+++    for pref in candidati:
+++        for sott in ("Library", "bin"):
+++            d = os.path.normcase(os.path.abspath(os.path.join(pref, sott)))
+++            if d not in visti and os.path.isdir(d):
+++                visti.add(d)
+++                indesiderati.append(d)
+++    # ogni voce del PATH che finisce in Library\bin o \bin e' una possibile
+++    # sorgente di DLL Qt concorrenti (altri ambienti, Qt di sistema, pyqt5,
+++    # toolchain, ecc.): le rimuoviamo tutte, perche' il conflitto non dipende
+++    # dall'ambiente attivo ma da QUALSIASI QtCore6.dll trovata prima.
+++    voci_extra = []
+++    for p in os.environ.get("PATH", "").split(os.pathsep):
+++        if not p:
+++            continue
+++        d = os.path.normcase(os.path.abspath(p))
+++        if d.endswith(("\\library\\bin", "\\bin")) and d not in visti:
+++            visti.add(d)
+++            voci_extra.append(d)
+++    return indesiderati, voci_extra
+++
+++
+++def _sanitizza_ricerca_dll() -> int:
+++    """Windows: ripulisce PATH e add_dll_directory dalle DLL Qt di terzi.
+++
+++    Il vero colpevole dell'errore "Impossibile trovare la procedura
+++    specificata" e' una QtCore6.dll INCOMPATIBILE caricata PRIMA di quella di
+++    PySide6. Puo' arrivare da:
+++      - <env>\\Library\\bin (pacchetto conda 'qt-main', trascinato da
+++        pythonocc-core/vtk);
+++      - qualsiasi altra cartella in PATH o registrata con
+++        os.add_dll_directory (altri ambienti conda, PyQt5, installer Qt,
+++        applicazioni che scrivono in PATH).
+++    Strategia usata qui:
+++      1) si importa SHIBOKEN6 PRIMA di QtCore: shiboken6 carica la sua
+++        MSVCP/PythonDLL e, soprattutto, PULLA la QtCore6.dll CORRETTA dalla
+++        cartella di PySide6 ancor prima che il loader ne trovi una sbagliata
+++        altrove (la prima copia caricata vince a parita' di nome);
+++      2) si rimuovono dai PATH del processo tutte le cartelle bin sospette;
+++      3) si registra SOLO la cartella di PySide6 come add_dll_directory,
+++        de-registrando le altre (i default search directories non toccano
+++        i directory di sistema, quindi OC/VC++ restano raggiungibili).
+++    Disattivabile con GCS_KEEP_CONDA_BIN=1 (in quel caso si salta tutto).
+++    Ritorna quante voci sono state rimosse/spostate.
+++    """
+++    if os.name != "nt" or os.environ.get("GCS_KEEP_CONDA_BIN") == "1":
+++        return 0
+++    rimossi = 0
+++    try:
+++        import shiboken6  # noqa: F401  (Nucleo della mitigazione: vedi doc)
+++    except Exception:
+++        pass
+++    indesiderati, extra = _bin_ambiente_conda()
+++    da_scartare = set(indesiderati) | set(extra)
+++    percorso = os.environ.get("PATH", "")
+++    parti = percorso.split(os.pathsep)
+++    tenute = [p for p in parti
+++              if not p or os.path.normcase(os.path.abspath(p)) not in da_scartare]
+++    n_path = len(parti) - len(tenute)
+++    if n_path:
+++        os.environ["PATH"] = os.pathsep.join(tenute)
+++        rimossi += n_path
+++    # de-registra i dll-directory aggiunti da altri (conda/python.exe lo fa
+++    # all'avvio usando i default paths; quelli non li possiamo togliere,
+++    # ma possiamo rimuovere le entry esplicite)
+++    try:
+++        for handle in list(getattr(os, "_dill_dir_handles_seen", []) or []):
+++            try:
+++                os.remove_dll_directory(handle)
+++                rimossi += 1
+++            except Exception:
+++                pass
+++    except AttributeError:
+++        pass
+++    return rimossi
+++
+++
++ def _prepara_dll_pyside() -> None:
++-    """Windows: mitiga il conflitto DLL tra PySide6 (pip) e le Qt di conda.
+++    """Windows: mitiga il conflitto DLL tra PySide6 e le Qt di conda/altri.
++
++-    pythonocc-core (conda-forge) trascina 'qt-main' nell'ambiente: le sue DLL
++-    finiscono in <env>\\Library\\bin, che conda antepone al PATH. Durante
++-    l'import di PySide6.QtWidgets Windows puo' risolvere i nomi con quelle
++-    versioni incompatibili, ottenendo:
+++    pythonocc-core (conda-forge) trascina 'qt-main': le sue DLL finiscono in
+++    <env>\\Library\\bin, che conda antepone al PATH. Idem per qualunque altro
+++    ambiente/toolchain Qt presente nel PATH. Durante l'import di
+++    PySide6.QtWidgets Windows puo' risolvere QtCore6.dll con una versione
+++    incompatibile, ottenendo:
++         "DLL load failed ... Impossibile trovare la procedura specificata."
++-    Qui antepuniamo la cartella di PySide6 alla ricerca delle DLL.
+++    Vedi _sanitizza_ricerca_dll per la strategia completa.
+++    Se PySide6 arriva gia' da conda-forge ed e' l'unica fonte di DLL nel
+++    PATH, la sanitizzazione resta comunque applicata (le DLL di qt-main
+++    nella SAME environment sono compatibili e raggiungibili via default
+++    search directories, non via PATH).
++     """
++     if os.name != "nt":
++         return
++@@ -33,6 +145,7 @@ def _prepara_dll_pyside() -> None:
++         import PySide6
++     except ImportError:
++         return
+++    _sanitizza_ricerca_dll()
++     d = os.path.dirname(os.path.abspath(PySide6.__file__))
++     os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
++     try:
++@@ -61,11 +174,29 @@ def selfcheck() -> int:
++     try:
++         import PySide6
++         from PySide6 import QtWidgets  # noqa: F401 — import effettivo usato dalla GUI
++-        voci.append(("PySide6 (QtWidgets)", PySide6.__version__, True))
+++        origine = "conda-forge" if _pyside_e_conda_forge() else "pip"
+++        voci.append(("PySide6 (QtWidgets)",
+++                     f"{PySide6.__version__} [{origine}]", True))
++     except ImportError as exc:
++         voci.append(("PySide6 (QtWidgets)", f"non caricabile: {exc}", False))
++     except Exception as exc:  # DLL corrotte, conflitti con Qt di conda, ecc.
++-        voci.append(("PySide6 (QtWidgets)", f"ERRORE: {exc}", False))
+++        note = ""
+++        try:
+++            import PySide6
+++            if not _pyside_e_conda_forge():
+++                note = ("\n      → PySide6 arriva da PIP e coesiste con qt-main "
+++                        "di conda (conflitto DLL).\n        Rimedio:\n"
+++                        "          python -m pip uninstall -y PySide6 "
+++                        "PySide6-Essentials PySide6-Addons shiboken6\n"
+++                        "          conda install -c conda-forge pyside6")
+++            else:
+++                note = ("\n      → PySide6 è già da conda-forge: ambiente misto/"
+++                        "corrotto. Ricostruirlo:\n"
+++                        "          conda env remove -n gmshcad\n"
+++                        "          conda env create -f environment.yml -n gmshcad")
+++        except Exception:
+++            pass
+++        voci.append(("PySide6 (QtWidgets)", f"ERRORE: {exc}{note}", False))
++
++     print(f"GmshCAD Studio — selfcheck")
++     for nome, stato, ok in voci:
++@@ -73,9 +204,15 @@ def selfcheck() -> int:
++     mancanti = [v for v in voci if not v[2]]
++     if mancanti:
++         print("\nPer completare l'installazione (ambiente attivo 'gmshcad'):")
++-        print("    python -m pip install PySide6 gmsh numpy pytest")
+++        print("  PySide6: NON via pip se l'ambiente ha qt-main/pythonocc-core,")
+++        print("    ma da conda-forge (evita il conflitto DLL su Windows):")
+++        print("      conda install -c conda-forge pyside6")
+++        print("  il resto può convivere via pip:")
+++        print("      python -m pip install gmsh numpy pytest")
++         print("  pythonocc-core NON è su PyPI, solo via conda-forge:")
++-        print("    conda install -c conda-forge pythonocc-core=7.7.2")
+++        print("      conda install -c conda-forge pythonocc-core=7.7.2")
+++        print("  In alternativa ricostruire tutto l'ambiente dal file:")
+++        print("      conda env create -f environment.yml -n gmshcad")
++     print("\nCon pythonocc-core e PySide6 installati è possibile avviare la GUI: "
++           "python main.py")
++     return 0
++@@ -114,27 +251,48 @@ def main() -> int:
++         print(f"PySide6 non avviabile: {exc}\n")
++         if "DLL load failed" in str(exc) or "specified module" in str(exc) \
++                 or "Impossibile trovare" in str(exc):
++-            print("PySide6 è presente ma QtWidgets non si carica. Se l'ambiente")
++-            print("conda contiene 'qt-main' (dipendenza di pythonocc-core/vtk),")
++-            print("è quasi certamente un conflitto DLL Qt-di-conda vs PySide6-di-pip.")
++-            print("Rimedi nell'ordine:")
++-            print("  1) usare PySide6 di conda-forge invece di pip (consigliato):")
++-            print("     python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6")
++-            print("     conda install -c conda-forge pyside6")
++-            print("  2) reinstallazione pulita via pip:")
++-            print("     python -m pip install --force-reinstall --no-cache-dir PySide6")
++-            print("  3) runtime Microsoft Visual C++ Redistributable (x64):")
++-            print("     https://aka.ms/vs/17/release/vc_redist.x64.exe")
++-            print("  4) versione stabile precedente:")
++-            print('     python -m pip install "PySide6==6.8.*"')
++-            print("\nNOTA: non rimuovere 'qt-main' se conda propone di eliminare")
++-            print("anche pythonocc-core: ne ha bisogno.")
+++            da_conda = False
+++            try:
+++                import PySide6  # il pacchetto puro Python di solito si carica
+++                da_conda = _pyside_e_conda_forge()
+++            except Exception:
+++                pass
+++            if not da_conda:
+++                print("PySide6 è presente ma QtWidgets non si carica. Conflitto")
+++                print("DLL Qt: una QtCore6.dll incompatibile (conda 'qt-main',")
+++                print("altro ambiente conda, o cartella nel PATH) viene caricata")
+++                print("prima di quella di PySide6.")
+++                print("Diagnostica utile (trova le copie concorrenti di Qt):")
+++                print("     where QtCore6.dll")
+++                print("     conda list | findstr /i \"pyside qt-main shiboken\"")
+++                print("Rimedio definitivo (ambiente attivo):\n")
+++                print("     python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6")
+++                print("     conda install -c conda-forge pyside6")
+++                print("\nAlternative, se il passo sopra non fosse possibile:")
+++                print("  a) runtime Microsoft Visual C++ Redistributable (x64):")
+++                print("     https://aka.ms/vs/17/release/vc_redist.x64.exe")
+++                print("  b) reinstallazione pulita via pip:")
+++                print("     python -m pip install --force-reinstall --no-cache-dir PySide6")
+++                print("  c) versione stabile precedente:")
+++                print('     python -m pip install "PySide6==6.8.*"')
+++                print("\nNOTA: non rimuovere 'qt-main' se conda propone di eliminare")
+++                print("anche pythonocc-core: ne ha bisogno.")
+++            else:
+++                print("PySide6 risulta già installato da conda-forge eppure non")
+++                print("si carica: probabile ambiente corrotto o misto pip+conda.")
+++                print("Ricostruisci l'ambiente dal file environment.yml:")
+++                print("     conda env remove -n gmshcad")
+++                print("     conda env create -f environment.yml -n gmshcad")
+++                print("(environment.yml installa PySide6 da conda-forge, non da pip)")
+++                print("Verifica poi che il prompt mostri (gmshcad) e non altri")
+++                print("ambienti prima di lanciare run.bat.")
++         else:
++-            print("Rimedio rapido (con l'ambiente 'gmshcad' attivo, come ora):")
++-            print("    python -m pip install PySide6")
++-            print("    python main.py")
++-            print("\nAlternativa senza pip (pacchetto conda 'pyside6'):")
+++            print("Rimedio consigliato (con l'ambiente conda attivo, come ora):")
++             print("    conda install -c conda-forge pyside6")
+++            print("    python main.py")
+++            print("\nAlternativa via pip (solo se NON hai qt-main/pythonocc-core:")
+++            print("usa un ambiente separato, altrimenti le due Qt confliggono):")
+++            print("    python -m pip install PySide6")
++         print("\nPer verificare tutte le dipendenze:  python main.py --selfcheck")
++         print("Demo headless senza GUI:             python main.py --demo")
++         return 1
++diff --git a/run.bat b/run.bat
++index 5b1554b..NEWCRLF 100644
++--- a/run.bat
+++++ b/run.bat
++@@ -1,0 +1,46 @@
++@echo off
++REM ============================================================
++REM  GmshCAD Studio - avvio con ambiente conda "gmshcad"
++REM  (nome allineato a environment.yml; sovrascrivibile con:
++REM   set GCS_ENV=altro_ambiente prima di run.bat)
++REM
++REM  ATTENZIONE: mantenere questo file in ASCII puro e con
++REM  fine-riga CRLF. Un salvataggio in UTF-8 o in LF fa dare
++REM  a cmd.exe errori tipo "... non atteso".
++REM  Il .gitattributes accluso forza gia' il CRLF al checkout.
++REM ============================================================
++setlocal enabledelayedexpansion
++
++cd /d "%~dp0"
++if "%GCS_ENV%"=="" set GCS_ENV=gmshcad
++
++REM --- Individua conda (conda-init potrebbe non essere attivo) ---
++set "CONDA_BAT="
++for %%C in ("%USERPROFILE%\miniconda3" "%USERPROFILE%\anaconda3" "%USERPROFILE%\miniforge3" "%LOCALAPPDATA%\miniconda3" "%LOCALAPPDATA%\anaconda3" "%LOCALAPPDATA%\miniforge3" "%PROGRAMDATA%\miniconda3" "%PROGRAMDATA%\anaconda3" "C:\ProgramData\miniforge3" "C:\Miniconda3" "C:\Anaconda3") do (
++    if not defined CONDA_BAT if exist "%%~C\Scripts\activate.bat" set "CONDA_BAT=%%~C\Scripts\activate.bat"
++)
++if not defined CONDA_BAT (
++    for /f "usebackq delims=" %%P in (`where conda 2^>nul`) do (
++        if not defined CONDA_BAT (
++            set "CONDA_BIN_DIR=%%~dpP"
++            REM risali da \Scripts o \condabin alla root di conda
++            for %%A in ("!CONDA_BIN_DIR!\..") do set "CONDA_ROOT=%%~fA"
++            for %%B in ("!CONDA_ROOT!\Scripts\activate.bat") do (
++                if exist "%%~fB" set "CONDA_BAT=%%~fB"
++            )
++        )
++    )
++)
++
++if defined CONDA_BAT (
++    call "%CONDA_BAT%" %GCS_ENV%
++    if errorlevel 1 echo [run.bat] ATTENZIONE: attivazione di '%GCS_ENV%' fallita. Avvio col python corrente.
++) else (
++    echo [run.bat] ATTENZIONE: conda non trovato: uso il python corrente.
++)
++
++REM --- Verifica rapida che l'interprete attivo sia quello dell'ambiente atteso ---
++python -c "import sys,os;p=sys.prefix;n=os.path.basename(p);sys.exit(0 if n=='%GCS_ENV%' else 1)" 2>nul || echo [run.bat] ATTENZIONE: python attivo NON sembra dell'ambiente '%GCS_ENV%'. Prova: conda activate %GCS_ENV% ^&^& python main.py --selfcheck
++
++python main.py %*
++endlocal
++diff --git a/run.sh b/run.sh
++index 99064da..9337d59 100644
++--- a/run.sh
+++++ b/run.sh
++@@ -1,14 +1,16 @@
++ #!/usr/bin/env bash
++ # Avvio GmshCAD Studio con l'ambiente conda "gmshcad"
+++# (nome allineato a environment.yml; sovrascrivibile con GCS_ENV=nome ./run.sh)
++ # Uso: ./run.sh            (GUI)
++ #      ./run.sh --demo     (demo headless)
++ set -e
++ cd "$(dirname "$0")"
+++GCS_ENV="${GCS_ENV:-gmshcad}"
++
++ # attiva l'ambiente se non siamo già dentro
++ if [ -z "$CONDA_PREFIX" ] || ! python -c "import OCC" 2>/dev/null; then
++   SOURCE="$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"
++-  [ -f "$SOURCE" ] && source "$SOURCE" && conda activate gmshcad
+++  [ -f "$SOURCE" ] && source "$SOURCE" && conda activate "$GCS_ENV"
++ fi
++
++ export QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-}
+diff --git a/main.py b/main.py
+index 81e58fd..68cf22e 100644
+--- a/main.py
++++ b/main.py
+@@ -16,16 +16,171 @@ import sys
+
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
++# --- tracking dei DLL search directory (solo Windows) ---------------------
++# FIX BUG: in precedenza si tentava di enumerare gli handle via
++# os._dill_dir_handles_seen, attributo che non esiste su CPython: la
++# de-registrazione delle entry di terzi era quindi un no-op silenzioso.
++# Ora ogni add_dll_directory() eseguita nel processo viene intercettata e
++# tracciata, così da poter chiudere le entry NON appartenenti a GmshCAD.
++_GCS_DLL_HANDLES = []          # [(handle_obj, path), ...] tutti quelli registrati
++_GCS_NOSTRI_HANDLES = set()    # id() degli handle PySide6 gestiti da noi
++
++
++def _installa_tracking_dll_directory() -> None:
++    """Patch (idempotente) di os.add_dll_directory per tracciare gli handle."""
++    if os.name != "nt":
++        return
++    originale = getattr(os, "add_dll_directory", None)
++    if originale is None or getattr(originale, "_gcs_tracked", False):
++        return
++
++    def _add(path):
++        h = originale(path)
++        try:
++            _GCS_DLL_HANDLES.append((h, str(path)))
++        except Exception:
++            pass
++        return h
++
++    _add._gcs_tracked = True
++    _add._gcs_originale = originale
++    os.add_dll_directory = _add
++
++
++_installa_tracking_dll_directory()
++
++
++def _pyside_e_conda_forge() -> bool:
++    """True se PySide6 proviene dal pacchetto conda-forge (non da pip).
++
++    Rilevamento: i pacchetti conda registrano l'history in
++    <env>/conda-meta/pyside6-*.json; le installazioni pip hanno solo il
++    dist-info dentro site-packages.
++    """
++    import glob
++    try:
++        import PySide6
++    except Exception:
++        return False
++    env = os.path.dirname(os.path.dirname(sys.executable))
++    if glob.glob(os.path.join(env, "conda-meta", "pyside6-*.json")):
++        return True
++    # fallback: percorso del pacchetto fuori da site-packages => non pip
++    pkg = os.path.abspath(PySide6.__file__)
++    return "site-packages" not in pkg.replace("\\", "/").lower()
++
++
++def _bin_ambiente_conda() -> list:
++    """Directory bin/DLL di tutti gli ambienti conda raggiunti dal PATH."""
++    indesiderati = []
++    visti = set()
++    # ambiente attivo: da sys.prefix / base_prefix (copre anche `python main.py`
++    # diretto, senza launcher) e da CONDA_PREFIX (altre eventuali attivazioni)
++    candidati = []
++    for prefisso in (sys.prefix, getattr(sys, "base_prefix", ""),
++                    os.environ.get("CONDA_PREFIX", "")):
++        if prefisso:
++            candidati.append(prefisso)
++    for pref in candidati:
++        for sott in ("Library", "bin"):
++            d = os.path.normcase(os.path.abspath(os.path.join(pref, sott)))
++            if d not in visti and os.path.isdir(d):
++                visti.add(d)
++                indesiderati.append(d)
++    # ogni voce del PATH che finisce in Library\bin o \bin e' una possibile
++    # sorgente di DLL Qt concorrenti (altri ambienti, Qt di sistema, pyqt5,
++    # toolchain, ecc.): le rimuoviamo tutte, perche' il conflitto non dipende
++    # dall'ambiente attivo ma da QUALSIASI QtCore6.dll trovata prima.
++    voci_extra = []
++    for p in os.environ.get("PATH", "").split(os.pathsep):
++        if not p:
++            continue
++        d = os.path.normcase(os.path.abspath(p))
++        if d.endswith(("\\library\\bin", "\\bin")) and d not in visti:
++            visti.add(d)
++            voci_extra.append(d)
++    return indesiderati, voci_extra
++
++
++def _sanitizza_ricerca_dll() -> int:
++    """Windows: ripulisce PATH e add_dll_directory dalle DLL Qt di terzi.
++
++    Il vero colpevole dell'errore "Impossibile trovare la procedura
++    specificata" e' una QtCore6.dll INCOMPATIBILE caricata PRIMA di quella di
++    PySide6. Puo' arrivare da:
++      - <env>\\Library\\bin (pacchetto conda 'qt-main', trascinato da
++        pythonocc-core/vtk);
++      - qualsiasi altra cartella in PATH o registrata con
++        os.add_dll_directory (altri ambienti conda, PyQt5, installer Qt,
++        applicazioni che scrivono in PATH).
++    Strategia usata qui:
++      1) si importa SHIBOKEN6 PRIMA di QtCore: shiboken6 carica la sua
++        MSVCP/PythonDLL e, soprattutto, PULLA la QtCore6.dll CORRETTA dalla
++        cartella di PySide6 ancor prima che il loader ne trovi una sbagliata
++        altrove (la prima copia caricata vince a parita' di nome);
++      2) si rimuovono dai PATH del processo tutte le cartelle bin sospette;
++      3) si registra SOLO la cartella di PySide6 come add_dll_directory,
++        de-registrando le altre (i default search directories non toccano
++        i directory di sistema, quindi OC/VC++ restano raggiungibili).
++    Disattivabile con GCS_KEEP_CONDA_BIN=1 (in quel caso si salta tutto).
++    Ritorna quante voci sono state rimosse/spostate.
++    """
++    if os.name != "nt" or os.environ.get("GCS_KEEP_CONDA_BIN") == "1":
++        return 0
++    rimossi = 0
++    try:
++        import shiboken6  # noqa: F401  (Nucleo della mitigazione: vedi doc)
++    except Exception:
++        pass
++    indesiderati, extra = _bin_ambiente_conda()
++    da_scartare = set(indesiderati) | set(extra)
++    percorso = os.environ.get("PATH", "")
++    parti = percorso.split(os.pathsep)
++    tenute = [p for p in parti
++              if not p or os.path.normcase(os.path.abspath(p)) not in da_scartare]
++    n_path = len(parti) - len(tenute)
++    if n_path:
++        os.environ["PATH"] = os.pathsep.join(tenute)
++        rimossi += n_path
++    # FIX BUG (debug repo): il codice precedente leggeva l'attributo
++    # os._dill_dir_handles_seen, che NON ESISTE su CPython: la de-registrazione
++    # dei DLL search directory aggiunti da altri (conda, vtk, estensioni) non
++    # avveniva mai e una QtCore6.dll concorrente poteva vincere al loader.
++    # Ora si fa tracking diretto: patchando os.add_dll_directory ogni
++    # registrazione del processo viene tracciata in _GCS_DLL_HANDLES; qui si
++    # chiudono gli handle NON nostri (quelli registrati prima del nostro
++    # import restano nei "default directories" del loader e non sono
++    # raggiungibili dall'API, ma almeno le entry esplicite di terzi cadono).
++    try:
++        for h, _p in list(_GCS_DLL_HANDLES):      # (handle, path)
++            if h is None or getattr(h, "closed", False):
++                continue
++            if id(h) in _GCS_NOSTRI_HANDLES:
++                continue  # il nostro PySide6 dir: lo gestisce _prepara_dll_pyside
++            try:
++                h.close()
++                rimossi += 1
++            except Exception:
++                pass
++    except Exception:
++        pass
++    return rimossi
++
+
+ def _prepara_dll_pyside() -> None:
+-    """Windows: mitiga il conflitto DLL tra PySide6 (pip) e le Qt di conda.
++    """Windows: mitiga il conflitto DLL tra PySide6 e le Qt di conda/altri.
+
+-    pythonocc-core (conda-forge) trascina 'qt-main' nell'ambiente: le sue DLL
+-    finiscono in <env>\\Library\\bin, che conda antepone al PATH. Durante
+-    l'import di PySide6.QtWidgets Windows puo' risolvere i nomi con quelle
+-    versioni incompatibili, ottenendo:
++    pythonocc-core (conda-forge) trascina 'qt-main': le sue DLL finiscono in
++    <env>\\Library\\bin, che conda antepone al PATH. Idem per qualunque altro
++    ambiente/toolchain Qt presente nel PATH. Durante l'import di
++    PySide6.QtWidgets Windows puo' risolvere QtCore6.dll con una versione
++    incompatibile, ottenendo:
+         "DLL load failed ... Impossibile trovare la procedura specificata."
+-    Qui antepuniamo la cartella di PySide6 alla ricerca delle DLL.
++    Vedi _sanitizza_ricerca_dll per la strategia completa.
++    Se PySide6 arriva gia' da conda-forge ed e' l'unica fonte di DLL nel
++    PATH, la sanitizzazione resta comunque applicata (le DLL di qt-main
++    nella SAME environment sono compatibili e raggiungibili via default
++    search directories, non via PATH).
+     """
+     if os.name != "nt":
+         return
+@@ -33,10 +188,21 @@ def _prepara_dll_pyside() -> None:
+         import PySide6
+     except ImportError:
+         return
++    _sanitizza_ricerca_dll()
+     d = os.path.dirname(os.path.abspath(PySide6.__file__))
++    # rimuove un'eventuale registrazione precedente (selfcheck poi GUI)
++    for hh, _p in list(_GCS_DLL_HANDLES):
++        if _p and os.path.normcase(_p) == os.path.normcase(d):
++            try:
++                hh.close()
++            except Exception:
++                pass
++            _GCS_DLL_HANDLES.remove((hh, _p))
++            _GCS_NOSTRI_HANDLES.discard(id(hh))
+     os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+     try:
+-        os.add_dll_directory(d)
++        h = os.add_dll_directory(d)
++        _GCS_NOSTRI_HANDLES.add(id(h))
+     except (AttributeError, OSError):
+         pass
+
+@@ -61,11 +227,29 @@ def selfcheck() -> int:
+     try:
+         import PySide6
+         from PySide6 import QtWidgets  # noqa: F401 — import effettivo usato dalla GUI
+-        voci.append(("PySide6 (QtWidgets)", PySide6.__version__, True))
++        origine = "conda-forge" if _pyside_e_conda_forge() else "pip"
++        voci.append(("PySide6 (QtWidgets)",
++                     f"{PySide6.__version__} [{origine}]", True))
+     except ImportError as exc:
+         voci.append(("PySide6 (QtWidgets)", f"non caricabile: {exc}", False))
+     except Exception as exc:  # DLL corrotte, conflitti con Qt di conda, ecc.
+-        voci.append(("PySide6 (QtWidgets)", f"ERRORE: {exc}", False))
++        note = ""
++        try:
++            import PySide6
++            if not _pyside_e_conda_forge():
++                note = ("\n      → PySide6 arriva da PIP e coesiste con qt-main "
++                        "di conda (conflitto DLL).\n        Rimedio:\n"
++                        "          python -m pip uninstall -y PySide6 "
++                        "PySide6-Essentials PySide6-Addons shiboken6\n"
++                        "          conda install -c conda-forge pyside6")
++            else:
++                note = ("\n      → PySide6 è già da conda-forge: ambiente misto/"
++                        "corrotto. Ricostruirlo:\n"
++                        "          conda env remove -n gmshcad\n"
++                        "          conda env create -f environment.yml -n gmshcad")
++        except Exception:
++            pass
++        voci.append(("PySide6 (QtWidgets)", f"ERRORE: {exc}{note}", False))
+
+     print(f"GmshCAD Studio — selfcheck")
+     for nome, stato, ok in voci:
+@@ -73,9 +257,15 @@ def selfcheck() -> int:
+     mancanti = [v for v in voci if not v[2]]
+     if mancanti:
+         print("\nPer completare l'installazione (ambiente attivo 'gmshcad'):")
+-        print("    python -m pip install PySide6 gmsh numpy pytest")
++        print("  PySide6: NON via pip se l'ambiente ha qt-main/pythonocc-core,")
++        print("    ma da conda-forge (evita il conflitto DLL su Windows):")
++        print("      conda install -c conda-forge pyside6")
++        print("  il resto può convivere via pip:")
++        print("      python -m pip install gmsh numpy pytest")
+         print("  pythonocc-core NON è su PyPI, solo via conda-forge:")
+-        print("    conda install -c conda-forge pythonocc-core=7.7.2")
++        print("      conda install -c conda-forge pythonocc-core=7.7.2")
++        print("  In alternativa ricostruire tutto l'ambiente dal file:")
++        print("      conda env create -f environment.yml -n gmshcad")
+     print("\nCon pythonocc-core e PySide6 installati è possibile avviare la GUI: "
+           "python main.py")
+     return 0
+@@ -114,27 +304,48 @@ def main() -> int:
+         print(f"PySide6 non avviabile: {exc}\n")
+         if "DLL load failed" in str(exc) or "specified module" in str(exc) \
+                 or "Impossibile trovare" in str(exc):
+-            print("PySide6 è presente ma QtWidgets non si carica. Se l'ambiente")
+-            print("conda contiene 'qt-main' (dipendenza di pythonocc-core/vtk),")
+-            print("è quasi certamente un conflitto DLL Qt-di-conda vs PySide6-di-pip.")
+-            print("Rimedi nell'ordine:")
+-            print("  1) usare PySide6 di conda-forge invece di pip (consigliato):")
+-            print("     python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6")
+-            print("     conda install -c conda-forge pyside6")
+-            print("  2) reinstallazione pulita via pip:")
+-            print("     python -m pip install --force-reinstall --no-cache-dir PySide6")
+-            print("  3) runtime Microsoft Visual C++ Redistributable (x64):")
+-            print("     https://aka.ms/vs/17/release/vc_redist.x64.exe")
+-            print("  4) versione stabile precedente:")
+-            print('     python -m pip install "PySide6==6.8.*"')
+-            print("\nNOTA: non rimuovere 'qt-main' se conda propone di eliminare")
+-            print("anche pythonocc-core: ne ha bisogno.")
++            da_conda = False
++            try:
++                import PySide6  # il pacchetto puro Python di solito si carica
++                da_conda = _pyside_e_conda_forge()
++            except Exception:
++                pass
++            if not da_conda:
++                print("PySide6 è presente ma QtWidgets non si carica. Conflitto")
++                print("DLL Qt: una QtCore6.dll incompatibile (conda 'qt-main',")
++                print("altro ambiente conda, o cartella nel PATH) viene caricata")
++                print("prima di quella di PySide6.")
++                print("Diagnostica utile (trova le copie concorrenti di Qt):")
++                print("     where QtCore6.dll")
++                print("     conda list | findstr /i \"pyside qt-main shiboken\"")
++                print("Rimedio definitivo (ambiente attivo):\n")
++                print("     python -m pip uninstall -y PySide6 PySide6-Essentials PySide6-Addons shiboken6")
++                print("     conda install -c conda-forge pyside6")
++                print("\nAlternative, se il passo sopra non fosse possibile:")
++                print("  a) runtime Microsoft Visual C++ Redistributable (x64):")
++                print("     https://aka.ms/vs/17/release/vc_redist.x64.exe")
++                print("  b) reinstallazione pulita via pip:")
++                print("     python -m pip install --force-reinstall --no-cache-dir PySide6")
++                print("  c) versione stabile precedente:")
++                print('     python -m pip install "PySide6==6.8.*"')
++                print("\nNOTA: non rimuovere 'qt-main' se conda propone di eliminare")
++                print("anche pythonocc-core: ne ha bisogno.")
++            else:
++                print("PySide6 risulta già installato da conda-forge eppure non")
++                print("si carica: probabile ambiente corrotto o misto pip+conda.")
++                print("Ricostruisci l'ambiente dal file environment.yml:")
++                print("     conda env remove -n gmshcad")
++                print("     conda env create -f environment.yml -n gmshcad")
++                print("(environment.yml installa PySide6 da conda-forge, non da pip)")
++                print("Verifica poi che il prompt mostri (gmshcad) e non altri")
++                print("ambienti prima di lanciare run.bat.")
+         else:
+-            print("Rimedio rapido (con l'ambiente 'gmshcad' attivo, come ora):")
+-            print("    python -m pip install PySide6")
+-            print("    python main.py")
+-            print("\nAlternativa senza pip (pacchetto conda 'pyside6'):")
++            print("Rimedio consigliato (con l'ambiente conda attivo, come ora):")
+             print("    conda install -c conda-forge pyside6")
++            print("    python main.py")
++            print("\nAlternativa via pip (solo se NON hai qt-main/pythonocc-core:")
++            print("usa un ambiente separato, altrimenti le due Qt confliggono):")
++            print("    python -m pip install PySide6")
+         print("\nPer verificare tutte le dipendenze:  python main.py --selfcheck")
+         print("Demo headless senza GUI:             python main.py --demo")
+         return 1
+diff --git a/run.bat b/run.bat
+index 5b1554b..05d48ef 100644
+--- a/run.bat
++++ b/run.bat
+@@ -1,5 +1,37 @@
+ @echo off
+ REM Avvio GmshCAD Studio con l'ambiente conda "gmshcad"
++REM (nome ambiente allineato a environment.yml; sovrascrivibile via
++REM  variabile GCS_ENV: set GCS_ENV=altro_ambiente prima di run.bat)
+ cd /d "%~dp0"
+-call conda activate gmshcad 2>nul
++if "%GCS_ENV%"=="" set GCS_ENV=gmshcad
++
++REM Individua conda (conda-init potrebbe non essere attivo in questo shell)
++set "CONDA_BAT="
++for %%C in ("%USERPROFILE%\miniconda3" "%USERPROFILE%\anaconda3" ^
++            "%USERPROFILE%\miniforge3" "%LOCALAPPDATA%\miniconda3" ^
++            "%LOCALAPPDATA%\anaconda3" "%LOCALAPPDATA%\miniforge3" ^
++            "%PROGRAMDATA%\miniconda3" "%PROGRAMDATA%\anaconda3" ^
++            "C:\ProgramData\miniforge3" "C:\Miniconda3" "C:\Anaconda3" ^
++            "C:\Dev\miniconda3" "C:\Dev\anaconda3" "C:\Dev\miniforge3") do (
++    if not defined CONDA_BAT if exist "%%~C\Scripts\activate.bat" set "CONDA_BAT=%%~C\Scripts\activate.bat"
++)
++if not defined CONDA_BAT for /f "delims=" %%P in ('where conda 2^>nul') do (
++    if not defined CONDA_BAT if exist "%%~dP\..\Scripts\activate.bat" ^
++        for %%A in ("%%~dP\..\Scripts\activate.bat") do set "CONDA_BAT=%%~fA"
++)
++
++if defined CONDA_BAT (
++    call "%CONDA_BAT%" %GCS_ENV%
++    if errorlevel 1 echo [run.bat] ATTENZIONE: attivazione di '%GCS_ENV%' fallita.^
++ Avvio con il python corrente.
++) else (
++    echo [run.bat] ATTENZIONE: conda non trovato: uso il python corrente.
++)
++
++REM Verifica rapida che l'interprete attivo sia quello dell'ambiente atteso
++python -c "import sys,os;p=sys.prefix;n=os.path.basename(p);sys.exit(0 if n=='%GCS_ENV%' else 1)" 2>nul || (
++    echo [run.bat] ATTENZIONE: python attivo NON sembra dell'ambiente '%GCS_ENV%' ^(prefix=%CD%^).
++    echo             Esegui manualmente: conda activate %GCS_ENV% ^&^& python main.py --selfcheck
++)
++
+ python main.py %*
+diff --git a/run.sh b/run.sh
+index 99064da..9337d59 100644
+--- a/run.sh
++++ b/run.sh
+@@ -1,14 +1,16 @@
+ #!/usr/bin/env bash
+ # Avvio GmshCAD Studio con l'ambiente conda "gmshcad"
++# (nome allineato a environment.yml; sovrascrivibile con GCS_ENV=nome ./run.sh)
+ # Uso: ./run.sh            (GUI)
+ #      ./run.sh --demo     (demo headless)
+ set -e
+ cd "$(dirname "$0")"
++GCS_ENV="${GCS_ENV:-gmshcad}"
+
+ # attiva l'ambiente se non siamo già dentro
+ if [ -z "$CONDA_PREFIX" ] || ! python -c "import OCC" 2>/dev/null; then
+   SOURCE="$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"
+-  [ -f "$SOURCE" ] && source "$SOURCE" && conda activate gmshcad
++  [ -f "$SOURCE" ] && source "$SOURCE" && conda activate "$GCS_ENV"
+ fi
+
+ export QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-}
+
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,2 @@
++run.bat text eol=crlf
++*.bat text eol=crlf

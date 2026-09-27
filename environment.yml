@@ -1,0 +1,13 @@
+name: gmshcad
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pythonocc-core=7.7.2
+  - pyside6            # da conda-forge: su Windows evita conflitti DLL con qt-main
+  - numpy
+  - xorg-libxinerama   # libreria nativa richiesta dal wheel pip di gmsh su Linux
+  - pip
+  - pip:
+      - gmsh
+      - pytest

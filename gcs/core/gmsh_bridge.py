@@ -272,3 +272,118 @@ def export_msh_22(model: MeshModel, path: str,
 
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(righe) + "\n")
+<<<<<<< HEAD
+=======
+
+
+# ---------------------------------------------------------------------------
+# structured quad / hex meshing (Gmsh transfinite)
+# ---------------------------------------------------------------------------
+
+def mesh_structured(
+    step_path: str,
+    out_msh: str,
+    dimension: int = 3,
+    nodes_per_curve: int = 11,
+    recombine: bool = True,
+    msh_version: str = "4.1",
+    surface_tags: Optional[List[int]] = None,
+    volume_tags: Optional[List[int]] = None,
+) -> dict:
+    """Genera mesh strutturata quad (2D) o hex (3D) da STEP/BREP.
+
+    Usa i vincoli transfinite nativi di Gmsh. In 2D, le curve di bordo
+    vengono discretizzate, la superficie e resa transfinite e, se richiesto,
+    ricombinata in quadrilateri. In 3D, le superfici di bordo vengono
+    trattate allo stesso modo e il volume viene impostato come transfinite.
+
+    Per una mesh esaedrica la topologia deve essere compatibile: un volume
+    a 6 facce (ad esempio un blocco/cubo) e il caso piu diretto.
+    I tag opzionali sono tag topologici Gmsh dopo l'import dello STEP.
+    """
+    gmsh = _require_gmsh()
+    dim = int(dimension)
+    ncurve = int(nodes_per_curve)
+    if dim not in (2, 3):
+        raise ValueError("dimension deve essere 2 oppure 3")
+    if ncurve < 2:
+        raise ValueError("nodes_per_curve deve essere >= 2")
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 1)
+        gmsh.option.setNumber("Mesh.Binary", 0)
+        gmsh.model.occ.importShapes(str(step_path))
+        gmsh.model.occ.synchronize()
+
+        if dim == 2:
+            tags = [int(x) for x in surface_tags] if surface_tags else None
+            targets = ([(2, tag) for tag in tags]
+                       if tags else list(gmsh.model.getEntities(2)))
+            if not targets:
+                raise RuntimeError("Nessuna superficie 2D disponibile per il meshing strutturato")
+            for _, surface in targets:
+                boundary = gmsh.model.getBoundary(
+                    [(2, int(surface))], oriented=False, recursive=False)
+                curves = [int(tag) for d, tag in boundary if int(d) == 1]
+                if len(curves) < 3:
+                    raise RuntimeError(f"Superficie {surface}: bordo insufficiente per Transfinite Surface")
+                for curve in curves:
+                    gmsh.model.mesh.setTransfiniteCurve(curve, ncurve)
+                gmsh.model.mesh.setTransfiniteSurface(int(surface))
+                if recombine:
+                    gmsh.model.mesh.setRecombine(2, int(surface))
+            gmsh.model.mesh.generate(2)
+            _write_msh(gmsh, out_msh, msh_version, True)
+            stats = _mesh_stats(gmsh)
+            stats.update({"method": "transfinite-quad" if recombine else "transfinite-tri",
+                          "dimension": 2,
+                          "targets": [tag for _, tag in targets],
+                          "nodes_per_curve": ncurve,
+                          "recombine": bool(recombine)})
+            return stats
+
+        tags = [int(x) for x in volume_tags] if volume_tags else None
+        targets = ([(3, tag) for tag in tags]
+                   if tags else list(gmsh.model.getEntities(3)))
+        if not targets:
+            raise RuntimeError("Nessun volume 3D disponibile per il meshing strutturato")
+
+        surfaces_seen = set()
+        curves_seen = set()
+        for _, volume in targets:
+            faces = gmsh.model.getBoundary(
+                [(3, int(volume))], oriented=False, recursive=False)
+            face_tags = [int(tag) for d, tag in faces if int(d) == 2]
+            if len(face_tags) not in (5, 6):
+                raise RuntimeError(
+                    f"Volume {volume}: {len(face_tags)} facce; Transfinite Volume richiede una topologia compatibile, tipicamente 6 facce")
+            for face in face_tags:
+                if face in surfaces_seen:
+                    continue
+                surfaces_seen.add(face)
+                curves = gmsh.model.getBoundary(
+                    [(2, int(face))], oriented=False, recursive=False)
+                curve_tags = [int(tag) for d, tag in curves if int(d) == 1]
+                for curve in curve_tags:
+                    if curve not in curves_seen:
+                        curves_seen.add(curve)
+                        gmsh.model.mesh.setTransfiniteCurve(curve, ncurve)
+                gmsh.model.mesh.setTransfiniteSurface(int(face))
+                if recombine:
+                    gmsh.model.mesh.setRecombine(2, int(face))
+            gmsh.model.mesh.setTransfiniteVolume(int(volume))
+
+        gmsh.option.setNumber("Mesh.Recombine3DLevel", 2 if recombine else 0)
+        gmsh.model.mesh.generate(3)
+        _write_msh(gmsh, out_msh, msh_version, True)
+        stats = _mesh_stats(gmsh)
+        stats.update({"method": "transfinite-hex" if recombine else "transfinite-volume",
+                      "dimension": 3,
+                      "targets": [tag for _, tag in targets],
+                      "nodes_per_curve": ncurve,
+                      "recombine": bool(recombine)})
+        return stats
+    finally:
+        gmsh.finalize()
+>>>>>>> master

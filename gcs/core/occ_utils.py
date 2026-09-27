@@ -652,6 +652,61 @@ def mesh_block_shape(model, dim: int, tag: int):
     return make_compound(shapes)
 
 
+<<<<<<< HEAD
+=======
+def mesh_elements_shape(model, element_ids):
+    """Costruisce una TopoDS compound solo per gli elementi mesh indicati.
+
+    È usata dal viewer come overlay di selezione: il blocco geometrico resta
+    visibile, ma la selezione effettiva del gruppo viene riscontrata sugli
+    elementi mesh coinvolti.
+    """
+    _require_occ()
+    from .mesh import ELEM_INFO, corner_nodes
+    shapes = []
+    seen = set()
+    for eid in sorted({int(x) for x in element_ids}):
+        if eid in seen or eid not in model.elements:
+            continue
+        seen.add(eid)
+        etype, nodes = model.elements[eid]
+        info = ELEM_INFO.get(etype)
+        if info is None:
+            continue
+        dim = int(info[2])
+        if dim == 0:
+            for nid in nodes:
+                if nid in model.nodes:
+                    shapes.append(make_vertex(model.nodes[nid]))
+        elif dim == 1:
+            cn = corner_nodes(etype, nodes)
+            if len(cn) >= 2 and cn[0] in model.nodes and cn[1] in model.nodes:
+                try:
+                    shapes.append(make_edge_p2p(model.nodes[cn[0]], model.nodes[cn[1]]))
+                except Exception:
+                    pass
+        elif dim == 2:
+            cn = corner_nodes(etype, nodes)
+            pts = [model.nodes[n] for n in cn if n in model.nodes]
+            if len(pts) >= 3:
+                try:
+                    shapes.append(make_face_polygon(pts))
+                except Exception:
+                    pass
+        elif dim == 3:
+            for face_nodes in model.boundary_faces([eid]):
+                pts = [model.nodes[n] for n in face_nodes if n in model.nodes]
+                if len(pts) == 3:
+                    try:
+                        shapes.append(make_face_polygon(pts))
+                    except Exception:
+                        pass
+    if not shapes:
+        return None
+    return make_compound(shapes)
+
+
+>>>>>>> master
 def repair_shape(shape):
     """Prova a riparare una shape con ShapeFix (best effort)."""
     _require_occ()

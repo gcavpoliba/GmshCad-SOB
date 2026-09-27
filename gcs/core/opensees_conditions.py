@@ -20,6 +20,10 @@ import os
 from typing import Dict, List, Optional, Set, Tuple, Any
 import numpy as np
 
+<<<<<<< HEAD
+=======
+from .geotech_catalog import GEOTECH_ELEMENTS, geotech_element_options, is_up_element
+>>>>>>> master
 from .opensees_catalog import (
     UNIAXIAL_MATERIALS, ND_MATERIALS, ELEMENT_CATALOG, SECTION_CATALOG,
     GEOM_TRANSF, BEAM_INTEGRATION, TIME_SERIES_TYPES, PATTERN_TYPES,
@@ -383,12 +387,32 @@ class MaterialDefinition:
         self.schema = schema
 
     def to_tcl(self) -> str:
+<<<<<<< HEAD
         values = " ".join(f"{value:.12g}" for value in self.parameters)
+=======
+        schema_params = self.schema.get("params", [])
+        formatted = []
+        for index, value in enumerate(self.parameters):
+            ptype = schema_params[index][1] if index < len(schema_params) and len(schema_params[index]) > 1 else "float"
+            if ptype == "int":
+                formatted.append(str(int(round(value))))
+            elif ptype == "bool":
+                formatted.append("1" if bool(value) else "0")
+            else:
+                formatted.append(f"{value:.12g}")
+        values = " ".join(formatted)
+>>>>>>> master
         # Materiali che richiedono argomenti speciali (es. -strain, -stress)
         if self.model == "ElasticMultiLinear":
             s = " ".join(f"{v:.12g}" for v in self.extra.get("strains", []))
             t = " ".join(f"{v:.12g}" for v in self.extra.get("stresses", []))
             return f"{self.command} {self.model} {self.tag} -strain {s} -stress {t};"
+<<<<<<< HEAD
+=======
+        suffix = str(self.extra.get("tcl_suffix", "")).strip()
+        if suffix:
+            return f"{self.command} {self.model} {self.tag} {values} {suffix};"
+>>>>>>> master
         if self.model in ("Parallel", "Series"):
             mat_tags = self.extra.get("mat_tags", "1 2")
             cmd = f"{self.command} {self.model} {self.tag} {mat_tags};"
@@ -682,6 +706,7 @@ class ElementLoad:
 
 
 class ElementAssignment:
+<<<<<<< HEAD
     """Tipo OpenSees e materiale assegnati a un blocco di elementi Gmsh.
 
     Per elementi che richiedono sezioni (shell, beam-column), `section_tag`
@@ -690,12 +715,22 @@ class ElementAssignment:
     """
 
     # Mapping tipo Gmsh -> nome OpenSees di default (per assegnazione automatica)
+=======
+    """Associazione Gmsh -> elemento OpenSees e set di proprietà fisiche.
+
+    element_command permette una formulazione esplicita, indispensabile per u-p.
+    element_args contiene l'intero tail Tcl dopo la connettività; {matTag} viene
+    sostituito automaticamente con il tag materiale dell'assegnazione.
+    """
+
+>>>>>>> master
     COMMANDS = {
         1: "truss",
         2: "tri31",
         3: "quad",
         4: "FourNodeTetrahedron",
         5: "stdBrick",
+<<<<<<< HEAD
         6: "bbarBrick",  # prism 6-nodi - prima mancante!
         11: "TenNodeTetrahedron",
     }
@@ -713,6 +748,26 @@ class ElementAssignment:
                        "zeroLengthInterface2D", "TwoNodeLink",
                        "FlatSliderBearing", "ElastomericBearing",
                        "FPBearingPTV", "Joint2D", "corotTruss", "TrussSection")
+=======
+        11: "TenNodeTetrahedron",
+    }
+
+    EXTRA_ELEMENTS = (
+        "elasticBeamColumn", "elasticTimoshenkoBeam", "forceBeamColumn",
+        "dispBeamColumn", "beamWithHinges", "nonlinearBeamColumn",
+        "ShellMITC4", "ShellDKGQ", "ASDShellQ4",
+        "bbarQuad", "enhancedQuad", "SSPquad",
+        "bbarBrick", "SSPbrick", "20NodeBrick",
+        "quadUP", "bbarQuadUP", "9_4_QuadUP", "SSPquadUP",
+        "brickUP", "bbarBrickUP", "20_8_BrickUP", "SSPbrickUP",
+        "zeroLength", "zeroLengthSection", "zeroLengthContact2D",
+        "zeroLengthContact3D", "zeroLengthInterface2D", "TwoNodeLink",
+        "SimpleContact2D", "SimpleContact3D", "BeamContact2D",
+        "BeamContact3D", "BeamEndContact3D",
+        "FlatSliderBearing", "ElastomericBearing", "FPBearingPTV",
+        "Joint2D", "corotTruss", "TrussSection"
+    )
+>>>>>>> master
 
     def __init__(self, entity_id: int, model_name: str, element_ids: List[int],
                  gmsh_type: int, material_tag: int, area: float = 1.0,
@@ -720,9 +775,19 @@ class ElementAssignment:
                  section_tag: Optional[int] = None,
                  transf_tag: Optional[int] = None,
                  integration_tag: Optional[int] = None,
+<<<<<<< HEAD
                  extra_args: Optional[str] = None):
         if gmsh_type not in self.COMMANDS:
             raise ValueError(f"Tipo elemento Gmsh {gmsh_type} non supportato in OpenSees")
+=======
+                 extra_args: Optional[str] = None,
+                 element_command: Optional[str] = None,
+                 element_args: Optional[str] = None):
+        if gmsh_type not in self.COMMANDS and not element_command:
+            raise ValueError(f"Tipo elemento Gmsh {gmsh_type} non supportato in OpenSees")
+        if element_command and element_command not in self.EXTRA_ELEMENTS and element_command not in self.COMMANDS.values():
+            raise ValueError(f"Elemento OpenSees non supportato: {element_command}")
+>>>>>>> master
         self.entity_id = int(entity_id)
         self.model_name = str(model_name)
         self.element_ids = sorted({int(eid) for eid in element_ids})
@@ -731,17 +796,40 @@ class ElementAssignment:
         self.area = float(area)
         self.thickness = float(thickness)
         self.plane_type = plane_type if plane_type in ("PlaneStress", "PlaneStrain") else "PlaneStress"
+<<<<<<< HEAD
         # Estensioni: sezione per shell/beam, transformazione per beam, integrazione
+=======
+>>>>>>> master
         self.section_tag = int(section_tag) if section_tag else None
         self.transf_tag = int(transf_tag) if transf_tag else None
         self.integration_tag = int(integration_tag) if integration_tag else None
         self.extra_args = str(extra_args) if extra_args else ""
+<<<<<<< HEAD
 
     def to_dict(self) -> dict:
         d = {"entity_id": self.entity_id, "model_name": self.model_name,
              "element_ids": self.element_ids, "gmsh_type": self.gmsh_type,
              "material_tag": self.material_tag, "area": self.area,
              "thickness": self.thickness, "plane_type": self.plane_type}
+=======
+        self.element_command = str(element_command) if element_command else None
+        self.element_args = str(element_args) if element_args else ""
+
+    def effective_command(self) -> str:
+        return self.element_command or self.COMMANDS[self.gmsh_type]
+
+    @property
+    def is_up(self) -> bool:
+        return is_up_element(self.effective_command())
+
+    def to_dict(self) -> dict:
+        d = {
+            "entity_id": self.entity_id, "model_name": self.model_name,
+            "element_ids": self.element_ids, "gmsh_type": self.gmsh_type,
+            "material_tag": self.material_tag, "area": self.area,
+            "thickness": self.thickness, "plane_type": self.plane_type,
+        }
+>>>>>>> master
         if self.section_tag is not None:
             d["section_tag"] = self.section_tag
         if self.transf_tag is not None:
@@ -750,6 +838,13 @@ class ElementAssignment:
             d["integration_tag"] = self.integration_tag
         if self.extra_args:
             d["extra_args"] = self.extra_args
+<<<<<<< HEAD
+=======
+        if self.element_command:
+            d["element_command"] = self.element_command
+        if self.element_args:
+            d["element_args"] = self.element_args
+>>>>>>> master
         return d
 
 
@@ -982,6 +1077,11 @@ class OpenSeesManager:
         self.update_materials_cmds: List[UpdateMaterialsCommand] = []
         # Mapping parametri globali (es. parametri di fase) -> valore
         self.global_parameters: Dict[str, float] = {}
+<<<<<<< HEAD
+=======
+        from .opensees_flow import OpenSeesFlow
+        self.flow = OpenSeesFlow()
+>>>>>>> master
 
         self._next_cid = 1
         self._next_eid = 1
@@ -1165,7 +1265,11 @@ class OpenSeesManager:
                              if item.tag == assignment.material_tag), None)
             material_name = material.name if material else str(assignment.material_tag)
             color = self.MATERIAL_COLORS[(assignment.material_tag - 1) % len(self.MATERIAL_COLORS)]
+<<<<<<< HEAD
             element_name = ElementAssignment.COMMANDS[assignment.gmsh_type]
+=======
+            element_name = assignment.effective_command()
+>>>>>>> master
             add_mark([assignment.entity_id], [],
                      f"MAT {assignment.material_tag} {element_name} "
                      f"({len(assignment.element_ids)} elem., {material_name})", color)
@@ -1202,7 +1306,12 @@ class OpenSeesManager:
                 entity.meta["fem_color"] = colors.get(entity.id, (0.86, 0.88, 0.90))
 
     def add_material(self, name: str, model: str,
+<<<<<<< HEAD
                      parameters: List[float], tag: Optional[int] = None) -> MaterialDefinition:
+=======
+                     parameters: List[float], tag: Optional[int] = None,
+                     extra: Optional[Dict[str, Any]] = None) -> MaterialDefinition:
+>>>>>>> master
         used = {material.tag for material in self.materials}
         if tag is None:
             tag = 1
@@ -1210,7 +1319,11 @@ class OpenSeesManager:
                 tag += 1
         if int(tag) in used:
             raise ValueError(f"Il tag materiale {tag} è già in uso")
+<<<<<<< HEAD
         material = MaterialDefinition(tag, name, model, parameters)
+=======
+        material = MaterialDefinition(tag, name, model, parameters, extra)
+>>>>>>> master
         self.materials.append(material)
         return material
 
@@ -1233,7 +1346,13 @@ class OpenSeesManager:
                                model=None, area: float = 1.0,
                                thickness: float = 1.0,
                                plane_type: str = "PlaneStress",
+<<<<<<< HEAD
                                element_ids: Optional[List[int]] = None) -> ElementAssignment:
+=======
+                               element_ids: Optional[List[int]] = None,
+                               element_command: Optional[str] = None,
+                               element_args: Optional[str] = None) -> ElementAssignment:
+>>>>>>> master
         entity = self.doc.entities.get(int(entity_id))
         if entity is None or not entity.meta.get("mesh_ref"):
             raise ValueError("Selezionare un'entità meshata (blocco Gmsh)")
@@ -1249,9 +1368,31 @@ class OpenSeesManager:
         if len(element_types) != 1:
             raise ValueError("Il blocco contiene tipi di elemento Gmsh misti")
         gmsh_type = element_types.pop()
+<<<<<<< HEAD
         if gmsh_type not in ElementAssignment.COMMANDS:
             raise ValueError(f"Il tipo Gmsh {gmsh_type} non ha un elemento OpenSees associato")
         if gmsh_type in (2, 3):
+=======
+        effective_command = element_command or ElementAssignment.COMMANDS.get(gmsh_type)
+        if effective_command is None:
+            raise ValueError(
+                f"Il tipo Gmsh {gmsh_type} non ha un mapping OpenSees diretto"
+            )
+        if effective_command in GEOTECH_ELEMENTS:
+            info = GEOTECH_ELEMENTS[effective_command]
+            if gmsh_type not in info.get("mesh_types", ()):
+                raise ValueError(
+                    f"{effective_command} non è compatibile direttamente con Gmsh {gmsh_type}"
+                )
+            required_ndm = info.get("ndm")
+            if isinstance(required_ndm, int) and self.ndm != required_ndm:
+                raise ValueError(f"{effective_command} richiede ndm={required_ndm}")
+            if self.ndf != info.get("ndf", self.ndf):
+                raise ValueError(f"{effective_command} richiede ndf={info.get('ndf')}")
+            if not element_args or not str(element_args).strip():
+                raise ValueError(f"{effective_command} richiede gli argomenti u-p dell'elemento")
+        if gmsh_type in (2, 3, 10):
+>>>>>>> master
             block_nodes = {node for eid in block.element_ids
                            for node in mesh_model.elements[eid][1]}
             heights = [mesh_model.nodes[node][2] for node in block_nodes]
@@ -1273,9 +1414,17 @@ class OpenSeesManager:
             expected = "uniaxialMaterial" if gmsh_type == 1 else "nDMaterial"
             if material.command != expected:
                 raise ValueError("Truss richiede materiale uniaxial; elementi continui richiedono materiale nD")
+<<<<<<< HEAD
         assignment = ElementAssignment(entity_id, model_name, sorted(selected_ids),
                                        gmsh_type, material_tag, area,
                                        thickness, plane_type)
+=======
+        assignment = ElementAssignment(
+            entity_id, model_name, sorted(selected_ids), gmsh_type, material_tag,
+            area, thickness, plane_type,
+            element_command=element_command, element_args=element_args
+        )
+>>>>>>> master
         retained = []
         for old in self.element_assignments:
             old_ids = set(old.element_ids)
@@ -1286,7 +1435,13 @@ class OpenSeesManager:
             if remaining:
                 retained.append(ElementAssignment(
                     old.entity_id, old.model_name, sorted(remaining), old.gmsh_type,
+<<<<<<< HEAD
                     old.material_tag, old.area, old.thickness, old.plane_type))
+=======
+                    old.material_tag, old.area, old.thickness, old.plane_type,
+                    old.section_tag, old.transf_tag, old.integration_tag, old.extra_args,
+                    old.element_command, old.element_args))
+>>>>>>> master
         self.element_assignments = retained
         self.element_assignments.append(assignment)
         self.refresh_entity_metadata()
@@ -1338,6 +1493,261 @@ class OpenSeesManager:
         return {"valid": not errors, "errors": errors,
                 "assigned_elements": sorted(owners)}
 
+<<<<<<< HEAD
+=======
+    def validate_model(self, model=None) -> Dict[str, Any]:
+        """Validazione pre-export dell'intero modello FEM/OpenSees.
+
+        Restituisce errori bloccanti e warning separati. La validazione richiede
+        che gli elementi analizzabili siano completamente assegnati, che i
+        riferimenti a materiali/sezioni/trasformazioni esistano e che le
+        condizioni abbiano almeno un target risolvibile.
+        """
+        if model is None and self.doc.mesh_models:
+            model = list(self.doc.mesh_models.values())[-1]
+        if model is None:
+            return {"valid": False, "errors": ["Nessun modello mesh disponibile"],
+                    "warnings": [], "stats": {}}
+
+        errors: List[str] = []
+        warnings: List[str] = []
+        stats: Dict[str, Any] = {}
+
+        from .opensees_export import verify_mesh_coherence
+        coherence = verify_mesh_coherence(model)
+        if not coherence["valid"]:
+            errors.extend(
+                [f"Mesh: {msg}" for msg in (
+                    [f"nodi mancanti: {coherence['missing_nodes'][:10]}"]
+                    if coherence["missing_nodes"] else []
+                )]
+            )
+            if coherence["mismatched_elements_count"]:
+                errors.append(
+                    f"Mesh: {coherence['mismatched_elements_count']} elementi con numero nodi errato"
+                )
+
+        assignments = [a for a in self.element_assignments
+                       if a.model_name == model.name]
+        owners: Dict[int, ElementAssignment] = {}
+        supported = set(ElementAssignment.COMMANDS)
+
+        # In una mesh Gmsh 3D possono essere presenti anche facce/linee di bordo.
+        # Non sono automaticamente elementi del modello OpenSees volumetrico.
+        # Consideriamo analizzabili gli elementi 1D e quelli con dimensione
+        # topologica coerente con ndm.
+        from .mesh import ELEM_INFO
+        analyzable_types = set()
+        for etype in supported:
+            info = ELEM_INFO.get(etype)
+            if info is None:
+                continue
+            name = info[0].lower()
+            dim = 1 if name.startswith(("linea", "line")) else (
+                2 if name.startswith(("triangolo", "quadrilatero")) else (
+                    3 if name.startswith(("tetraedro", "esaedro")) else 0
+                )
+            )
+            if dim == self.ndm or dim == 1:
+                analyzable_types.add(etype)
+        supported_model_elements = {
+            eid for eid, (etype, _) in model.elements.items()
+            if etype in analyzable_types
+        }
+
+        # Gli elementi presenti nella mesh ma non trattabili dal mapper restano
+        # un warning diagnostico e non vengono falsamente considerati assegnati.
+        unsupported = sorted(
+            eid for eid, (etype, _) in model.elements.items()
+            if etype not in supported and (
+                ELEM_INFO.get(etype, ("", 0, 0))[1] is not None
+            )
+        )
+        if unsupported:
+            warnings.append(
+                f"{len(unsupported)} elementi Gmsh non mappati direttamente da OpenSees "
+                f"(primi: {unsupported[:12]})"
+            )
+
+        for assignment in assignments:
+            entity = self.doc.entities.get(assignment.entity_id)
+            if entity is None:
+                errors.append(f"Assegnazione: entità {assignment.entity_id} inesistente")
+                continue
+            for eid in assignment.element_ids:
+                if eid not in model.elements:
+                    errors.append(
+                        f"Assegnazione {entity.name}: elemento {eid} non presente nella mesh"
+                    )
+                    continue
+                if eid in owners:
+                    errors.append(f"Elemento {eid}: assegnato a più proprietà fisiche")
+                else:
+                    owners[eid] = assignment
+
+                etype = model.elements[eid][0]
+                if assignment.gmsh_type != etype:
+                    errors.append(
+                        f"Elemento {eid}: tipo Gmsh {etype} diverso dal tipo assegnato "
+                        f"{assignment.gmsh_type}"
+                    )
+                if assignment.element_command:
+                    command = assignment.element_command
+                    info = ELEMENT_CATALOG.get(command) or GEOTECH_ELEMENTS.get(command, {})
+                    if not info:
+                        errors.append(f"Elemento {eid}: comando OpenSees {command} non catalogato")
+                    elif command in GEOTECH_ELEMENTS:
+                        allowed_types = tuple(info.get("mesh_types", ()))
+                        if etype not in allowed_types:
+                            errors.append(f"Elemento {eid}: {command} incompatibile con Gmsh {etype}")
+                        req_ndm = info.get("ndm")
+                        if isinstance(req_ndm, int) and self.ndm != req_ndm:
+                            errors.append(f"Elemento {eid}: {command} richiede ndm={req_ndm}")
+                        req_ndf = info.get("ndf")
+                        if req_ndf and self.ndf != req_ndf:
+                            errors.append(f"Elemento {eid}: {command} richiede ndf={req_ndf}")
+                        if assignment.is_up and not assignment.element_args.strip():
+                            errors.append(f"Elemento {eid}: {command} richiede element_args u-p")
+                if etype in (2, 3, 10) and self.ndm != 2:
+                    errors.append(f"Elemento {eid}: elemento piano incompatibile con ndm={self.ndm}")
+                if etype in (4, 5, 11) and self.ndm != 3:
+                    errors.append(f"Elemento {eid}: elemento solido incompatibile con ndm={self.ndm}")
+                if assignment.gmsh_type in (1,) and assignment.area <= 0:
+                    errors.append(f"Elemento {eid}: area deve essere > 0")
+                if assignment.gmsh_type in (2, 3) and assignment.thickness <= 0:
+                    errors.append(f"Elemento {eid}: thickness deve essere > 0")
+
+        unassigned = sorted(supported_model_elements - set(owners))
+        if unassigned:
+            errors.append(
+                f"{len(unassigned)} elementi OpenSees senza proprietà assegnata "
+                f"(primi: {unassigned[:12]})"
+            )
+
+        materials = {m.tag: m for m in self.materials}
+        if len(materials) != len(self.materials):
+            errors.append("Tag materiale duplicati")
+        sections = {s.tag: s for s in self.sections}
+        if len(sections) != len(self.sections):
+            errors.append("Tag sezione duplicati")
+        transformations = {t.tag: t for t in self.geom_transfs}
+        if len(transformations) != len(self.geom_transfs):
+            errors.append("Tag geomTransf duplicati")
+        integrations = {b.tag: b for b in self.beam_integrations}
+        if len(integrations) != len(self.beam_integrations):
+            errors.append("Tag beamIntegration duplicati")
+
+        for eid, assignment in owners.items():
+            if assignment.material_tag not in materials:
+                errors.append(
+                    f"Elemento {eid}: materiale {assignment.material_tag} non definito"
+                )
+            if assignment.section_tag is not None and assignment.section_tag not in sections:
+                errors.append(
+                    f"Elemento {eid}: sezione {assignment.section_tag} non definita"
+                )
+            if assignment.transf_tag is not None and assignment.transf_tag not in transformations:
+                errors.append(
+                    f"Elemento {eid}: geomTransf {assignment.transf_tag} non definita"
+                )
+            if assignment.integration_tag is not None and assignment.integration_tag not in integrations:
+                errors.append(
+                    f"Elemento {eid}: beamIntegration {assignment.integration_tag} non definita"
+                )
+            if assignment.gmsh_type == 1 and materials.get(assignment.material_tag) and \
+                    materials[assignment.material_tag].command != "uniaxialMaterial":
+                errors.append(
+                    f"Elemento {eid}: truss richiede uniaxialMaterial"
+                )
+            if assignment.gmsh_type in (2, 3, 4, 5, 10, 11) and materials.get(assignment.material_tag) and \
+                    materials[assignment.material_tag].command != "nDMaterial":
+                errors.append(
+                    f"Elemento {eid}: elemento continuo richiede nDMaterial"
+                )
+            if assignment.is_up and assignment.material_tag in materials and                     materials[assignment.material_tag].command != "nDMaterial":
+                errors.append(f"Elemento {eid}: elemento u-p richiede nDMaterial")
+
+        for constraint in self.constraints:
+            nodes = self.resolve_constraint_nodes(constraint, model)
+            if not nodes:
+                errors.append(f"Vincolo '{constraint.name}': nessun nodo risolvibile")
+            elif max(constraint.dof_flags(), default=0) > self.ndf:
+                errors.append(
+                    f"Vincolo '{constraint.name}': DOF incompatibile con ndf={self.ndf}"
+                )
+        for eq in self.equaldofs:
+            pairs = self.resolve_equaldof_pairs(eq, model)
+            if not pairs:
+                errors.append(f"EqualDOF '{eq.name}': nessuna coppia master/slave risolvibile")
+            if any(m == s for m, s in pairs):
+                errors.append(f"EqualDOF '{eq.name}': master e slave contengono lo stesso nodo")
+
+        for recorder in self.recorders:
+            if not self.resolve_recorder_targets(recorder, model):
+                warnings.append(f"Recorder '{recorder.kind} {recorder.response}': nessun target risolvibile")
+
+        for binding in self.parameter_bindings:
+            if binding.target_type == "element":
+                if binding.target_id not in model.elements:
+                    errors.append(
+                        f"Parameter {binding.tag}: elemento {binding.target_id} non presente"
+                    )
+                if not binding.path.strip():
+                    errors.append(f"Parameter {binding.tag}: path vuoto")
+            elif binding.target_type == "node" and binding.target_id not in model.nodes and                     binding.target_id not in self.manual_nodes:
+                errors.append(
+                    f"Parameter {binding.tag}: nodo {binding.target_id} non presente"
+                )
+
+        for interface in self.interfaces:
+            if interface.model_name and interface.model_name != model.name:
+                continue
+            if len(interface.secondary_nodes) != len(interface.primary_nodes):
+                errors.append("Interfaccia: discretizzazione secondaria/primaria non compatibile")
+            if len(interface.secondary_nodes) < 2:
+                errors.append("Interfaccia: servono almeno due nodi per lato")
+            if interface.kn <= 0 or interface.kt < 0:
+                errors.append("Interfaccia: rigidezze kn/kt non valide")
+
+        if self.multi_stage:
+            seen_stage_tags = set()
+            for stage in self.stages:
+                if stage.stage_id in seen_stage_tags:
+                    errors.append(f"Fase {stage.stage_id}: tag duplicato")
+                seen_stage_tags.add(stage.stage_id)
+                if stage.solver is None:
+                    errors.append(f"Fase {stage.stage_id}: solver non definito")
+                if stage.update_command == "updateParameter":
+                    if stage.parameter_tag not in {p.tag for p in self.parameter_bindings}:
+                        errors.append(
+                            f"Fase {stage.stage_id}: parameter {stage.parameter_tag} non definito"
+                        )
+
+        stats.update({
+            "mesh_nodes": len(model.nodes),
+            "mesh_elements": len(model.elements),
+            "assigned_elements": len(owners),
+            "unassigned_elements": len(unassigned),
+            "materials": len(self.materials),
+            "sections": len(self.sections),
+            "constraints": len(self.constraints),
+            "equal_dof": len(self.equaldofs),
+            "interfaces": len(self.interfaces),
+            "parameters": len(self.parameter_bindings),
+            "phases": len(self.stages),
+        })
+        return {"valid": not errors, "errors": errors, "warnings": warnings,
+                "stats": stats}
+
+    def remove_interface(self, index: int) -> bool:
+        """Rimuove un'interfaccia per indice di elenco."""
+        if 0 <= int(index) < len(self.interfaces):
+            self.interfaces.pop(int(index))
+            self.refresh_entity_metadata()
+            return True
+        return False
+
+>>>>>>> master
     def add_manual_node(self, x: float, y: float, z: float,
                         tag: Optional[int] = None) -> int:
         used = set(self.manual_nodes)
@@ -1871,7 +2281,18 @@ class OpenSeesManager:
                 if self.materials and mat_tag not in material_tags:
                     raise ValueError(f"Elemento {eid}: materiale OpenSees {mat_tag} inesistente")
                 if assignment:
+<<<<<<< HEAD
                     command = ElementAssignment.COMMANDS[etype]
+=======
+                    command = assignment.effective_command()
+                    if assignment.element_args.strip():
+                        args = assignment.element_args.replace(
+                            "{matTag}", str(assignment.material_tag)).strip()
+                        lines.append(
+                            f"element {command} {eid} {' '.join(map(str, ordered))} {args};"
+                        )
+                        continue
+>>>>>>> master
                     if etype == 1:
                         lines.append(f"element truss {eid} {ordered[0]} {ordered[1]} {assignment.area:g} {mat_tag};")
                     elif etype == 2:
@@ -1886,6 +2307,13 @@ class OpenSeesManager:
                         lines.append(f"element {command} {eid} {' '.join(map(str, ordered[:4]))} {mat_tag};")
                     elif etype == 5:
                         lines.append(f"element {command} {eid} {' '.join(map(str, ordered[:8]))} {mat_tag};")
+<<<<<<< HEAD
+=======
+                    elif etype == 10:
+                        raise ValueError(
+                            "L'elemento Gmsh 10 (quad9) richiede element_args per 9_4_QuadUP"
+                        )
+>>>>>>> master
                     elif etype == 11:
                         lines.append(f"element {command} {eid} {' '.join(map(str, ordered[:10]))} {mat_tag};")
                     continue
@@ -1935,6 +2363,7 @@ class OpenSeesManager:
         lines += [
             "",
             "#" + "-" * 78,
+<<<<<<< HEAD
             "# 3. VINCOLI STATICI (Boundary Conditions — fix)",
             "#" + "-" * 78,
         ]
@@ -2182,6 +2611,39 @@ class OpenSeesManager:
             ]
 
         lines.append("")
+=======
+            "# 3. WORKFLOW DELLE FASI — COMANDI EDITABILI",
+            "#" + "-" * 78,
+        ]
+
+        # Il flow è la sorgente d'ordine per tutte le operazioni che modificano
+        # il dominio durante il calcolo. Le definizioni di modello (nodi,
+        # materiali, elementi, interfacce e timeSeries) restano nelle sezioni
+        # precedenti per preservare le dipendenze OpenSees.
+        self.flow.sync_from_manager(self, model)
+        for phase, commands in self.flow.phase_commands(self, model):
+            if phase.phase_id == 0:
+                continue
+            lines += [
+                "",
+                "#" + "=" * 78,
+                f"# FASE {phase.phase_id}: {phase.name.upper()}",
+                "#" + "=" * 78,
+            ]
+            if phase.notes:
+                lines.append(f"# {phase.notes}")
+            if not commands:
+                lines.append("# (nessun comando di fase)")
+                continue
+            for command in commands:
+                if command.notes:
+                    lines.append(f"# {command.notes}")
+                if command.tcl.strip():
+                    lines.extend(command.tcl.rstrip().splitlines())
+
+        lines.append("")
+        lines.append("")
+>>>>>>> master
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
@@ -2213,6 +2675,10 @@ class OpenSeesManager:
             "set_parameters": [sp.to_dict() for sp in self.set_parameters],
             "update_materials_cmds": [um.to_dict() for um in self.update_materials_cmds],
             "global_parameters": dict(self.global_parameters),
+<<<<<<< HEAD
+=======
+            "flow": self.flow.to_dict(),
+>>>>>>> master
         }
 
     @classmethod
@@ -2289,4 +2755,11 @@ class OpenSeesManager:
         mgr.update_materials_cmds = [UpdateMaterialsCommand(**item)
                                       for item in d.get("update_materials_cmds", [])]
         mgr.global_parameters = dict(d.get("global_parameters", {}))
+<<<<<<< HEAD
+=======
+        from .opensees_flow import OpenSeesFlow
+        flow_data = d.get("flow")
+        if isinstance(flow_data, dict):
+            mgr.flow = OpenSeesFlow.from_dict(flow_data)
+>>>>>>> master
         return mgr

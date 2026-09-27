@@ -12,7 +12,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QTreeWidget, QTreeWidgetItem, QTableWidget,
                                QTableWidgetItem, QTextEdit, QLineEdit,
                                QPushButton, QListWidget, QListWidgetItem,
+<<<<<<< HEAD
                                QHeaderView, QAbstractItemView, QMenu)
+=======
+                               QHeaderView, QAbstractItemView, QMenu, QInputDialog, QMessageBox)
+>>>>>>> master
 
 from gcs.core.entities import NOME_TIPO_IT
 from gcs.core.document import CADDocument
@@ -72,11 +76,24 @@ class EntityTree(QWidget):
                 for mname, els in g.mesh_elements.items():
                     figlio = QTreeWidgetItem(
                         [f"{mname}: {len(els)} elementi", "Mesh", ""])
+<<<<<<< HEAD
+=======
+                    figlio.setData(0, Qt.UserRole + 2, mname)
+                    figlio.setData(0, Qt.UserRole + 3, sorted(int(e) for e in els))
+                    figlio.setToolTip(0, "Doppio click: seleziona gli elementi mesh e i relativi blocchi")
+>>>>>>> master
                     figlio.setForeground(0, QBrush(QColor("#81A1C1")))
                     it.addChild(figlio)
                 for mname, nodi in g.mesh_nodes.items():
                     figlio = QTreeWidgetItem(
                         [f"{mname}: {len(nodi)} nodi", "Mesh", ""])
+<<<<<<< HEAD
+=======
+                    figlio.setData(0, Qt.UserRole + 2, mname)
+                    figlio.setData(0, Qt.UserRole + 4, sorted(int(n) for n in nodi))
+                    figlio.setToolTip(0, "Doppio click: seleziona i nodi mesh e i blocchi associati")
+                    figlio.setForeground(0, QBrush(QColor("#81A1C1")))
+>>>>>>> master
                     it.addChild(figlio)
                 self.tree.addTopLevelItem(it)
             # entità non in gruppi
@@ -111,6 +128,43 @@ class EntityTree(QWidget):
         if eid is not None:
             self.doc.set_selection([eid])
             self.viewer.highlight_selection()
+<<<<<<< HEAD
+=======
+            return
+        model_name = item.data(0, Qt.UserRole + 2)
+        element_ids = item.data(0, Qt.UserRole + 3) or []
+        node_ids = item.data(0, Qt.UserRole + 4) or []
+        if not model_name:
+            return
+        model = self.doc.mesh_models.get(str(model_name))
+        if model is None:
+            return
+        model.sel_elements = set(int(e) for e in element_ids)
+        model.sel_nodes = set(int(n) for n in node_ids)
+        if element_ids:
+            model.sel_nodes.update(model.nodes_of_elements(model.sel_elements))
+        block_keys = set()
+        for elid in model.sel_elements:
+            key = model.block_of_element(elid)
+            if key:
+                block_keys.add(key)
+        model.sel_blocks = block_keys
+        # Ricostruisce anche la selezione documentale dai blocchi mesh:
+        # il viewer può così evidenziare il corrispondente blocco Gmsh.
+        eids = set()
+        for doc_eid, ent in self.doc.entities.items():
+            ref = ent.meta.get("mesh_ref")
+            if not ref or ref[0] != str(model_name):
+                continue
+            block = model.blocks.get((ref[1], ref[2]))
+            if block and block_keys.intersection({(ref[1], ref[2])}):
+                eids.add(doc_eid)
+            elif block and set(block.element_ids).intersection(model.sel_elements):
+                eids.add(doc_eid)
+        self.doc.set_selection(eids or self.doc.selection)
+        self.viewer.highlight_selection()
+        self.refresh()
+>>>>>>> master
 
     def _on_check(self, item, col):
         if self._updating or col != 0:
@@ -246,10 +300,32 @@ class EntityTree(QWidget):
         dlg.exec()
 
     def _select_group_members(self, gname):
+<<<<<<< HEAD
         grp = self.doc.groups.get(gname)
         if grp:
             self.doc.set_selection(grp.member_ids)
             self.viewer.highlight_selection()
+=======
+        try:
+            entity_ids, mesh_selection = self.doc.groups.resolve_mesh_selection(self.doc, gname)
+        except Exception:
+            return
+        for model_name, data in mesh_selection.items():
+            model = self.doc.mesh_models.get(model_name)
+            if model is None:
+                continue
+            model.sel_elements = set(data.get("elements", set()))
+            model.sel_nodes = set(data.get("nodes", set()))
+            if model.sel_elements:
+                model.sel_nodes.update(model.nodes_of_elements(model.sel_elements))
+            model.sel_blocks = {
+                model.block_of_element(eid) for eid in model.sel_elements
+                if model.block_of_element(eid) is not None
+            }
+        self.doc.set_selection(entity_ids)
+        self.viewer.highlight_selection()
+        self.refresh()
+>>>>>>> master
 
     def _add_sel_to_group(self, gname):
         self.doc.groups.add_geo(gname, self.doc.selection)
@@ -564,3 +640,286 @@ class MacroPanel(QWidget):
         win = self.window()
         if hasattr(win, "run_macro"):
             win.run_macro(self.engine.by_name(self.lista.item(row).text()))
+<<<<<<< HEAD
+=======
+
+
+
+class OpenSeesFlowPanel(QWidget):
+    """Albero editabile del workflow OpenSees e dei comandi Tcl di fase."""
+
+    def __init__(self, doc: CADDocument, model=None, parent=None):
+        super().__init__(parent)
+        self.doc = doc
+        self.model = model or (list(doc.mesh_models.values())[-1] if doc.mesh_models else None)
+        self._building = False
+        self.setMinimumWidth(360)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+
+        title = QLabel("<b>Workflow OpenSees — fasi e comandi Tcl</b>")
+        title.setToolTip(
+            "Sposta i comandi tra le fasi; doppio click su una fase o comando per modificarlo.")
+        lay.addWidget(title)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(("Fase / comando", "Tipo", "Stato"))
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tree.itemDoubleClicked.connect(self._edit_item)
+        self.tree.currentItemChanged.connect(self._show_details)
+        lay.addWidget(self.tree, 2)
+
+        btns = QHBoxLayout()
+        self.btn_add_phase = QPushButton("+ Fase")
+        self.btn_add_cmd = QPushButton("+ Tcl")
+        self.btn_up = QPushButton("↑")
+        self.btn_down = QPushButton("↓")
+        self.btn_toggle = QPushButton("Abilita/Disabilita")
+        self.btn_move_phase = QPushButton("Sposta a fase…")
+        self.btn_remove = QPushButton("Rimuovi")
+        self.btn_add_phase.clicked.connect(self._add_phase)
+        self.btn_add_cmd.clicked.connect(self._add_custom)
+        self.btn_up.clicked.connect(lambda: self._move(-1))
+        self.btn_down.clicked.connect(lambda: self._move(1))
+        self.btn_toggle.clicked.connect(self._toggle)
+        self.btn_move_phase.clicked.connect(self._move_to_phase)
+        self.btn_remove.clicked.connect(self._remove)
+        for b in (self.btn_add_phase, self.btn_add_cmd, self.btn_up,
+                  self.btn_down, self.btn_toggle, self.btn_move_phase, self.btn_remove):
+            btns.addWidget(b)
+        lay.addLayout(btns)
+
+        self.details = QTextEdit()
+        self.details.setReadOnly(True)
+        self.details.setPlaceholderText("Seleziona un comando per vedere il Tcl che sarà esportato.")
+        self.details.setFontFamily("Monospace")
+        self.details.setMaximumHeight(180)
+        lay.addWidget(self.details, 1)
+
+        self.refresh()
+
+    def refresh(self):
+        if self._building or not hasattr(self.doc, "opensees"):
+            return
+        self._building = True
+        try:
+            flow = self.doc.opensees.flow
+            flow.sync_from_manager(self.doc.opensees, self.model)
+            self.tree.clear()
+            for phase in flow.phases:
+                pitem = QTreeWidgetItem([
+                    f"{phase.phase_id:02d} · {phase.name}",
+                    "FASE",
+                    "ON" if phase.enabled else "OFF",
+                ])
+                pitem.setData(0, Qt.UserRole, int(phase.phase_id))
+                pitem.setData(0, Qt.UserRole + 7, "phase")
+                pitem.setCheckState(0, Qt.Checked if phase.enabled else Qt.Unchecked)
+                if phase.phase_id == 0:
+                    pitem.setForeground(0, QBrush(QColor("#88C0D0")))
+                for index, command in enumerate(phase.commands):
+                    state = "ON" if command.enabled else "OFF"
+                    if command.overridden:
+                        state += " · EDIT"
+                    item = QTreeWidgetItem([
+                        "  ↳ " + command.label,
+                        command.kind,
+                        state,
+                    ])
+                    item.setData(0, Qt.UserRole, int(phase.phase_id))
+                    item.setData(0, Qt.UserRole + 1, int(index))
+                    item.setData(0, Qt.UserRole + 2, command.uid)
+                    item.setData(0, Qt.UserRole + 7, "command")
+                    item.setCheckState(0, Qt.Checked if command.enabled else Qt.Unchecked)
+                    item.setToolTip(0, command.tcl)
+                    if not command.editable:
+                        item.setForeground(0, QBrush(QColor("#8FBCBB")))
+                    elif command.overridden:
+                        item.setForeground(0, QBrush(QColor("#EBCB8B")))
+                    pitem.addChild(item)
+                self.tree.addTopLevelItem(pitem)
+                pitem.setExpanded(phase.phase_id > 0)
+        finally:
+            self._building = False
+        self._show_details(self.tree.currentItem(), None)
+
+    def _selected_command(self):
+        item = self.tree.currentItem()
+        if item is None or item.data(0, Qt.UserRole + 7) != "command":
+            return None
+        phase = self.doc.opensees.flow.get_phase(item.data(0, Qt.UserRole))
+        if phase is None:
+            return None
+        index = int(item.data(0, Qt.UserRole + 1))
+        if not (0 <= index < len(phase.commands)):
+            return None
+        return phase, index, phase.commands[index]
+
+    def _edit_item(self, item, column):
+        kind = item.data(0, Qt.UserRole + 7)
+        if kind == "phase":
+            phase = self.doc.opensees.flow.get_phase(item.data(0, Qt.UserRole))
+            if phase is None:
+                return
+            value, ok = QInputDialog.getText(
+                self, "Modifica fase", "Nome fase:", text=phase.name)
+            if ok and value.strip():
+                phase.name = value.strip()
+                phase.name_overridden = True
+                stage = next((s for s in self.doc.opensees.stages
+                               if int(s.stage_id) == int(phase.phase_id)), None)
+                if stage is not None:
+                    stage.name = phase.name
+                self.doc.opensees.flow.current_phase_id = phase.phase_id
+                self.doc.notify("opensees_flow_changed", {"phase": phase.phase_id})
+                self.refresh()
+            return
+
+        selected = self._selected_command()
+        if selected is None:
+            return
+        phase, _, command = selected
+        if not command.editable:
+            self.details.setPlainText(
+                "# Comando generato dal modello; modifica da GUI dedicata.\n\n" + command.tcl)
+            return
+        text, ok = QInputDialog.getMultiLineText(
+            self, "Modifica comando Tcl",
+            f"{command.label}\nModifica il Tcl che sarà scritto nella fase {phase.phase_id}:",
+            command.tcl)
+        if ok:
+            command.tcl = text.strip()
+            command.overridden = True
+            self.doc.opensees.flow.current_phase_id = phase.phase_id
+            self.doc.notify("opensees_flow_changed", {"command": command.uid})
+            self.refresh()
+
+    def _add_phase(self):
+        name, ok = QInputDialog.getText(self, "Nuova fase", "Nome fase:",
+                                        text="Nuova fase")
+        if not ok:
+            return
+        phase_name = name.strip() or "Nuova fase"
+        phase = self.doc.opensees.flow.add_phase(phase_name)
+        from ..core.opensees_conditions import AnalysisStage, SolverSettings
+        solver = SolverSettings.from_dict(self.doc.opensees.default_solver.to_dict())
+        self.doc.opensees.stages.append(
+            AnalysisStage(
+                phase.phase_id, phase.name, stage_type="static",
+                material_stage=1, mat_tag=1,
+                update_stage_cmd=False, load_const=False,
+                solver=solver, update_command="none"
+            )
+        )
+        self.doc.opensees.flow.current_phase_id = phase.phase_id
+        self.doc.notify("opensees_flow_changed", {"phase": phase.phase_id})
+        self.refresh()
+
+    def _add_custom(self):
+        item = self.tree.currentItem()
+        phase_id = self.doc.opensees.flow.current_phase_id
+        if item is not None:
+            phase_id = int(item.data(0, Qt.UserRole))
+            if item.data(0, Qt.UserRole + 7) == "command":
+                # Il comando selezionato determina la fase.
+                pass
+        label, ok = QInputDialog.getText(self, "Nuovo comando Tcl",
+                                         "Descrizione:", text="Operazione Tcl")
+        if not ok:
+            return
+        tcl, ok = QInputDialog.getMultiLineText(
+            self, "Nuovo comando Tcl", "Comando Tcl:", "set parametro 1;")
+        if not ok or not tcl.strip():
+            return
+        self.doc.opensees.flow.add_custom(phase_id, label, tcl)
+        self.doc.notify("opensees_flow_changed", {})
+        self.refresh()
+
+    def _move(self, delta):
+        selected = self._selected_command()
+        if selected is None:
+            return
+        phase, index, _ = selected
+        if self.doc.opensees.flow.move_command(phase.phase_id, index, delta):
+            self.doc.notify("opensees_flow_changed", {})
+            self.refresh()
+
+    def _move_to_phase(self):
+        selected = self._selected_command()
+        if selected is None:
+            return
+        current_phase, index, command = selected
+        phases = [p for p in self.doc.opensees.flow.phases if p.phase_id != current_phase.phase_id]
+        if not phases:
+            return
+        labels = [f"{p.phase_id}: {p.name}" for p in phases]
+        label, ok = QInputDialog.getItem(
+            self, "Sposta comando", "Fase di destinazione:", labels, 0, False)
+        if not ok:
+            return
+        target_id = phases[labels.index(label)].phase_id
+        current_phase.commands.pop(index)
+        self.doc.opensees.flow.get_phase(target_id).commands.append(command)
+        self.doc.opensees.flow.current_phase_id = target_id
+        self.doc.notify("opensees_flow_changed", {"command": command.uid, "phase": target_id})
+        self.refresh()
+
+    def _toggle(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        kind = item.data(0, Qt.UserRole + 7)
+        phase_id = int(item.data(0, Qt.UserRole))
+        if kind == "phase":
+            phase = self.doc.opensees.flow.get_phase(phase_id)
+            if phase:
+                phase.enabled = not phase.enabled
+        else:
+            selected = self._selected_command()
+            if selected:
+                _, _, command = selected
+                command.enabled = not command.enabled
+        self.doc.notify("opensees_flow_changed", {})
+        self.refresh()
+
+    def _remove(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        phase_id = int(item.data(0, Qt.UserRole))
+        kind = item.data(0, Qt.UserRole + 7)
+        if kind == "phase":
+            if phase_id == 0:
+                QMessageBox.information(self, "Flow", "La fase 00 contiene le definizioni del modello.")
+                return
+            if self.doc.opensees.flow.remove_phase(phase_id):
+                self.doc.opensees.stages = [
+                    s for s in self.doc.opensees.stages
+                    if int(s.stage_id) != phase_id
+                ]
+        else:
+            phase = self.doc.opensees.flow.get_phase(phase_id)
+            if phase:
+                self.doc.opensees.flow.remove_command(
+                    phase_id, int(item.data(0, Qt.UserRole + 1)))
+        self.doc.notify("opensees_flow_changed", {})
+        self.refresh()
+
+    def _show_details(self, item, previous):
+        if item is None:
+            self.details.clear()
+            return
+        kind = item.data(0, Qt.UserRole + 7)
+        if kind == "phase":
+            phase = self.doc.opensees.flow.get_phase(item.data(0, Qt.UserRole))
+            self.details.setPlainText(
+                (phase.notes if phase and phase.notes else "(fase senza note)") +
+                (f"\n\nComandi: {len(phase.commands)}" if phase else ""))
+            return
+        selected = self._selected_command()
+        if selected:
+            phase, _, command = selected
+            header = f"# Fase {phase.phase_id}: {phase.name}\n# {command.kind} · {command.label}"
+            self.details.setPlainText(header + "\n\n" + command.tcl)
+>>>>>>> master

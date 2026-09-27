@@ -72,6 +72,33 @@ entità, modellazione B-Rep di punti/curve/superfici/solidi e meshing embedded.
   del progetto; gli elementi beam/shell e gli altri modelli avanzati non sono
   ancora inclusi nei form guidati.
 
+<<<<<<< HEAD
+=======
+### Registro OpenSees e meshing strutturato
+
+Il progetto include un **registro centralizzato dei comandi OpenSees** in
+`gcs/core/opensees_registry.py`. Il registro normalizza i comandi core
+(ModelBuilder, Domain, Analysis, recorder e parameter) e gli schemi presenti
+nel catalogo, associando a ogni voce la famiglia, la provenienza nel tree
+`OpenSees/SRC`, la sintassi disponibile e il link alla documentazione
+ufficiale.
+
+Dalla GUI: **OpenSees -> Catalogo esteso -> Browser comandi OpenSees…**.
+Il browser permette ricerca per nome/famiglia/sintassi, filtro per categoria,
+visualizzazione della provenienza `SRC/...` e copia della sintassi.
+
+Per la discretizzazione strutturata è disponibile **Mesha strutturato
+quad/hex (Gmsh)**. In 2D usa i vincoli transfinite sulle curve e sulle
+superfici e, quando richiesto, la ricombinazione in quadrilateri. In 3D
+applica i vincoli alle superfici di bordo e `Transfinite Volume`; per
+ottenere esaedri la topologia deve essere compatibile, come nel caso di un
+blocco/cubo a sei facce. Le impostazioni sono accessibili anche dalla
+toolbar Mesh.
+
+Questa separazione mantiene distinto il nucleo CAD/mesh dal layer OpenSees:
+il catalogo guida form e validazione, mentre il browser rende espliciti anche
+i comandi registrati nel core che richiedono un form specialistico dedicato.
+>>>>>>> master
 ## Installazione
 
 Il modo consigliato è creare l'ambiente completo da `environment.yml`

@@ -30,10 +30,18 @@ ELEM_INFO: Dict[int, Tuple[str, Optional[int], int]] = {
     14: ("piramide14", 14, 5),
     15: ("punto", 1, 1),
     16: ("quadrilatero8", 8, 4),
+<<<<<<< HEAD
 }
 
 NOME_ELEMENTO_IT = {1: "Linea", 2: "Triangolo", 3: "Quadrilatero", 4: "Tetraedro",
                     5: "Esaedro", 15: "Punto"}
+=======
+    17: ("esaedro20", 20, 8),
+}
+
+NOME_ELEMENTO_IT = {1: "Linea", 2: "Triangolo", 3: "Quadrilatero", 4: "Tetraedro",
+                    5: "Esaedro", 15: "Punto", 17: "Esaedro20"}
+>>>>>>> master
 
 
 def corner_nodes(etype: int, nodes: List[int]) -> List[int]:
@@ -120,7 +128,11 @@ class MeshModel:
             per_tipo[etype] = per_tipo.get(etype, 0) + 1
             info = ELEM_INFO.get(etype)
             dim = {1: 1, 8: 1, 2: 2, 3: 2, 9: 2, 10: 2, 16: 2,
+<<<<<<< HEAD
                    4: 3, 5: 3, 6: 3, 7: 3, 11: 3, 12: 3, 13: 3, 14: 3}.get(etype, 0)
+=======
+                   4: 3, 5: 3, 6: 3, 7: 3, 11: 3, 12: 3, 13: 3, 14: 3, 17: 3}.get(etype, 0)
+>>>>>>> master
             per_dim[dim] = per_dim.get(dim, 0) + 1
         return {
             "nome": self.name,

@@ -15,7 +15,11 @@ import traceback
 
 from PySide6.QtCore import Qt, QProcess
 from PySide6.QtGui import QAction, QKeySequence
+<<<<<<< HEAD
 from PySide6.QtWidgets import (QMainWindow, QDockWidget, QTabWidget, QToolBar,
+=======
+from PySide6.QtWidgets import (QDialog, QMainWindow, QDockWidget, QTabWidget, QToolBar,
+>>>>>>> master
                                QMessageBox, QFileDialog, QInputDialog, QLabel,
                                QStatusBar, QApplication, QColorDialog)
 
@@ -28,7 +32,11 @@ from gcs.core import gmsh_bridge as gb
 from gcs.core.macro_engine import MacroEngine, write_macro_template
 from gcs.gui.viewer import Viewer3D, NullViewer
 from gcs.gui.panels import (EntityTree, PropertiesPanel, ConsolePanel,
+<<<<<<< HEAD
                             LogPanel, MacroPanel)
+=======
+                            LogPanel, MacroPanel, OpenSeesFlowPanel)
+>>>>>>> master
 from gcs.gui.dialogs import ParamDialog
 
 
@@ -84,6 +92,18 @@ class MainWindow(QMainWindow):
         d1.setWidget(self.tree_panel)
         d1.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, d1)
+<<<<<<< HEAD
+=======
+
+        self.flow_panel = OpenSeesFlowPanel(self.doc)
+        self.flow_dock = QDockWidget("Workflow OpenSees — Fasi / Tcl", self)
+        self.flow_dock.setWidget(self.flow_panel)
+        self.flow_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.flow_dock)
+        self.splitDockWidget(d1, self.flow_dock, Qt.Vertical)
+
+>>>>>>> master
         d2 = QDockWidget("Proprietà", self)
         d2.setWidget(self.props_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, d2)
@@ -123,6 +143,11 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self._act("&Mesha il modello selezionato (gmsh)…",
                               self.act_mesha, "Ctrl+M"))
+<<<<<<< HEAD
+=======
+        m.addAction(self._act("Mesha strutturato quad/hex (Gmsh)…",
+                              self.act_mesha_structured, "Ctrl+Shift+M"))
+>>>>>>> master
         m.addSeparator()
         m.addAction(self._act("Chiudi", self.close, "Ctrl+Q"))
 
@@ -227,8 +252,16 @@ class MainWindow(QMainWindow):
                     self.act_export_phase_model))
         m_os.addAction(self._act("Configura &Solutore e Fasi (Gravity / Elastoplastica)…",
                                 self.act_opensees_solver_stages))
+<<<<<<< HEAD
         m_os.addAction(self._act("Modello FEM: materiali, elementi, nodi e recorder…",
                     self.act_opensees_fem))
+=======
+        m_os.addAction(self._act("Workflow Fasi / comandi Tcl…", self.act_show_opensees_flow))
+        m_os.addAction(self._act("Modello FEM: materiali, elementi, nodi e recorder…",
+                    self.act_opensees_fem))
+        m_os.addAction(self._act("Valida modello OpenSees…",
+                    self.act_validate_opensees_model))
+>>>>>>> master
         m_os.addAction(self._act("Esegui script Tcl con OpenSees…",
                     self.act_run_opensees))
         m_os.addSeparator()
@@ -238,6 +271,13 @@ class MainWindow(QMainWindow):
                                 self.act_opensees_load))
         m_os.addAction(self._act("Associa &EqualDOF (multi-point constraint)…",
                                 self.act_opensees_equaldof))
+<<<<<<< HEAD
+=======
+        m_os.addAction(self._act("Rimuovi vincolo / EqualDOF…",
+                                self.act_remove_opensees_constraint))
+        m_os.addAction(self._act("Rimuovi interfaccia…",
+                                self.act_remove_opensees_interface))
+>>>>>>> master
         m_os.addSeparator()
         # --- Nuovi comandi estesi (catalogo allargato) ---
         m_os_cat = m_os.addMenu("Catalogo esteso")
@@ -251,6 +291,11 @@ class MainWindow(QMainWindow):
                                        self.act_define_ele_load))
         m_os_cat.addAction(self._act("Definisci region (con rayleigh opzionale)…",
                                        self.act_define_region))
+<<<<<<< HEAD
+=======
+        m_os_cat.addAction(self._act("Browser comandi OpenSees…",
+                                       self.act_opensees_command_browser))
+>>>>>>> master
         m_os.addSeparator()
         # --- Parametri (updateParameter, setParameter, updateMaterials) ---
         m_os_param = m_os.addMenu("Parametri (update)")
@@ -379,6 +424,10 @@ class MainWindow(QMainWindow):
         tb2.addAction(self._act("Carico", self.act_opensees_load))
         tb2.addAction(self._act("EqualDOF", self.act_opensees_equaldof))
         tb2.addAction(self._act("Solutore e Fasi", self.act_opensees_solver_stages))
+<<<<<<< HEAD
+=======
+        tb2.addAction(self._act("Mesh strutturata", self.act_mesha_structured))
+>>>>>>> master
         tb2.addSeparator()
         tb2.addAction(self._act("Sel. tutti gli elementi",
                                 lambda: self._mesh_action("all")))
@@ -543,7 +592,12 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QDialog
         from gcs.gui.dialogs import ParamDialog
         from gcs.core.macro_engine import Param
+<<<<<<< HEAD
         chiavi = sorted(self.doc.parameters) or ["h", "L", "R"]
+=======
+        doc_par = self.doc.parameters
+        chiavi = sorted(doc_par) or ["h", "L", "R"]
+>>>>>>> master
 
         class _Spec:
             name = "Update parameters"
@@ -555,8 +609,11 @@ class MainWindow(QMainWindow):
             @staticmethod
             def targets_label():
                 return "modello globale"
+<<<<<<< HEAD
 
         doc_par = self.doc.parameters
+=======
+>>>>>>> master
         dlg = ParamDialog(_Spec, self)
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -771,6 +828,13 @@ class MainWindow(QMainWindow):
         elif event == "opensees_condition_added":
             self.doc.opensees.refresh_entity_metadata()
             self._refresh_all()
+<<<<<<< HEAD
+=======
+        elif event == "opensees_flow_changed":
+            if hasattr(self, "flow_panel"):
+                self.flow_panel.refresh()
+            self._update_status()
+>>>>>>> master
         elif event == "selection_changed":
             self.props_panel.refresh()
             self.tree_panel.refresh()
@@ -815,6 +879,11 @@ class MainWindow(QMainWindow):
     def _refresh_all(self):
         self.tree_panel.refresh()
         self.props_panel.refresh()
+<<<<<<< HEAD
+=======
+        if hasattr(self, "flow_panel"):
+            self.flow_panel.refresh()
+>>>>>>> master
         if self.viewer is not None:
             self.viewer.redraw_all(fit=False)
         self._update_status()
@@ -864,6 +933,17 @@ class MainWindow(QMainWindow):
                 self._act(nome, lambda chk=False, s=self.engine.by_name(nome):
                           self.run_macro(s)))
 
+<<<<<<< HEAD
+=======
+    def act_show_opensees_flow(self):
+        """Mostra e porta in primo piano il pannello workflow OpenSees."""
+        dock = getattr(self, "flow_dock", None)
+        if dock is not None:
+            dock.show()
+            dock.raise_()
+            self._log("Workflow OpenSees: pannello Fasi / Tcl attivo.")
+
+>>>>>>> master
     def _set_mode(self, modo):
         self.doc.mode = modo
         self._tb_geometria.setVisible(modo == "geometria")
@@ -973,6 +1053,124 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._errore("Meshing gmsh", exc)
 
+<<<<<<< HEAD
+=======
+    def act_mesha_structured(self):
+        """Genera una mesh transfinite strutturata quad/hex dalla geometria corrente."""
+        from .dialogs import StructuredMeshDialog
+        try:
+            if not self.doc.selected_entities():
+                self._log("Seleziona prima una superficie o un solido da meshare")
+                return
+            step_tmp = os.path.join(os.path.expanduser("~"), "gmshcad_structured.step")
+            self.doc.export_step(step_tmp)
+            dlg = StructuredMeshDialog(self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            vals = dlg.values()
+            out = vals["output"] or "modello_structured.msh"
+            os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+            stats = gb.mesh_structured(
+                step_tmp, out, dimension=vals["dimension"],
+                nodes_per_curve=vals["nodes_per_curve"],
+                recombine=vals["recombine"], msh_version="4.1")
+            self._log(f"Mesh strutturata generata: {out} ({stats})")
+            if QMessageBox.question(self, "Riimporta",
+                                    "Aprire ora la mesh strutturata in modalità Mesh?") == QMessageBox.Yes:
+                self.doc.import_msh(out)
+                self._set_mode("mesh")
+        except Exception as exc:
+            self._errore("Mesh strutturata", exc)
+
+    def act_opensees_command_browser(self):
+        """Apre il browser centralizzato del catalogo OpenSees/SRC."""
+        try:
+            from .dialogs import OpenSeesCommandBrowserDialog
+            dlg = OpenSeesCommandBrowserDialog(self)
+            dlg.exec()
+        except Exception as exc:
+            self._errore("OpenSees Command Browser", exc)
+
+    def act_validate_opensees_model(self):
+        """Esegue la validazione pre-export e mostra errori/warning separati."""
+        model = list(self.doc.mesh_models.values())[-1] if self.doc.mesh_models else None
+        report = self.doc.opensees.validate_model(model)
+        lines = [
+            "VALIDAZIONE MODELLO OPENSEES",
+            "",
+            f"Stato: {'VALIDO' if report['valid'] else 'NON VALIDO'}",
+            "",
+            "Statistiche:",
+        ]
+        for key, value in report["stats"].items():
+            lines.append(f"  {key}: {value}")
+        if report["errors"]:
+            lines.extend(["", "ERRORI BLOCCANTI:"])
+            lines.extend(f"  • {msg}" for msg in report["errors"])
+        if report["warnings"]:
+            lines.extend(["", "WARNING:"])
+            lines.extend(f"  • {msg}" for msg in report["warnings"])
+        if not report["errors"] and not report["warnings"]:
+            lines.extend(["", "Nessuna anomalia rilevata."])
+        QMessageBox.information(
+            self, "Validazione OpenSees", "\n".join(lines)
+        )
+
+    def act_remove_opensees_constraint(self):
+        """Rimuove un vincolo statico o EqualDOF scelto dall'utente."""
+        choices = []
+        for item in self.doc.opensees.constraints:
+            choices.append(f"FIX {item.cid}: {item.name}")
+        for item in self.doc.opensees.equaldofs:
+            choices.append(f"EqualDOF {item.eid}: {item.name}")
+        if not choices:
+            self._log("Nessun vincolo/OpenSees EqualDOF definito.")
+            return
+        selected, ok = QInputDialog.getItem(
+            self, "Rimuovi vincolo", "Seleziona il vincolo da eliminare:",
+            choices, 0, False
+        )
+        if not ok:
+            return
+        if selected.startswith("FIX "):
+            cid = int(selected.split(":", 1)[0].split()[1])
+            removed = self.doc.opensees.remove_constraint(cid)
+        else:
+            eid = int(selected.split(":", 1)[0].split()[-1])
+            removed = self.doc.opensees.remove_equaldof(eid)
+        if removed:
+            self.doc.opensees.refresh_entity_metadata()
+            self.doc.notify("opensees_condition_added", {"type": "constraint_removed"})
+            self._log(f"Condizione OpenSees rimossa: {selected}")
+        else:
+            self._log(f"Impossibile rimuovere: {selected}")
+
+    def act_remove_opensees_interface(self):
+        """Rimuove un'interfaccia definita nel documento."""
+        interfaces = self.doc.opensees.interfaces
+        if not interfaces:
+            self._log("Nessuna interfaccia definita.")
+            return
+        choices = []
+        for i, item in enumerate(interfaces):
+            choices.append(
+                f"{i}: secondaria={item.secondary_entity_id}, primaria={item.primary_entity_id}, "
+                f"segmenti={max(0, len(item.secondary_nodes)-1)}"
+            )
+        selected, ok = QInputDialog.getItem(
+            self, "Rimuovi interfaccia", "Seleziona l'interfaccia:",
+            choices, 0, False
+        )
+        if not ok:
+            return
+        idx = int(selected.split(":", 1)[0])
+        if self.doc.opensees.remove_interface(idx):
+            self.doc.notify("opensees_condition_added", {"type": "interface_removed"})
+            self._log(f"Interfaccia {idx} rimossa.")
+        else:
+            self._log(f"Impossibile rimuovere interfaccia {idx}.")
+
+>>>>>>> master
     def act_export_opensees(self):
         """Esportazione OpenSees: nodi per gruppi definiti e connectivity list coerente."""
         if not getattr(self.doc, "mesh_models", None):
@@ -989,11 +1187,29 @@ class MainWindow(QMainWindow):
                 "Prima dell'export Tcl assegna un materiale e un tipo OpenSees "
                 "alle entità meshate da OpenSees > Modello FEM.")
             return
+<<<<<<< HEAD
         validation = self.doc.opensees.validate_element_assignments(active_model)
         if not validation["valid"]:
             details = "\n".join(validation["errors"][:12])
             QMessageBox.warning(self, "Assegnazioni FEM non valide", details)
             return
+=======
+        validation = self.doc.opensees.validate_model(active_model)
+        if not validation["valid"]:
+            details = "\n".join(validation["errors"][:20])
+            QMessageBox.warning(self, "Modello OpenSees non valido",
+                                "L'export e stato bloccato.\n\n" + details)
+            return
+        if validation["warnings"]:
+            details = "\n".join(validation["warnings"][:12])
+            answer = QMessageBox.question(
+                self, "Warning OpenSees",
+                "Il modello e valido ma presenta warning:\n\n" + details +
+                "\n\nProcedere comunque con l'export?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if answer != QMessageBox.Yes:
+                return
+>>>>>>> master
         from .dialogs import OpenSeesExportDialog
         from ..core import opensees_export as ose
 

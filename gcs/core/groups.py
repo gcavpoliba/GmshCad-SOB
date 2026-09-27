@@ -135,6 +135,35 @@ class GroupManager:
         _ = seen
         return out
 
+<<<<<<< HEAD
+=======
+    def resolve_mesh_selection(self, doc, name: str):
+        """Risolve un gruppo in entità CAD e selezioni mesh visualizzabili."""
+        g = self._require(name)
+        entity_ids = set(g.member_ids)
+        mesh_selection = {}
+        for model_name, element_ids in g.mesh_elements.items():
+            data = mesh_selection.setdefault(model_name, {"elements": set(), "nodes": set()})
+            data["elements"].update(int(e) for e in element_ids)
+        for model_name, node_ids in g.mesh_nodes.items():
+            data = mesh_selection.setdefault(model_name, {"elements": set(), "nodes": set()})
+            data["nodes"].update(int(n) for n in node_ids)
+
+        for eid, ent in doc.entities.items():
+            ref = ent.meta.get("mesh_ref")
+            if not ref:
+                continue
+            model_name, dim, tag = ref
+            data = mesh_selection.get(model_name)
+            model = doc.mesh_models.get(model_name)
+            if not data or model is None:
+                continue
+            block = model.blocks.get((dim, tag))
+            if block and set(block.element_ids).intersection(data["elements"]):
+                entity_ids.add(eid)
+        return entity_ids, mesh_selection
+
+>>>>>>> master
     def group_from_selection(self, doc, name: str, color=None) -> EntityGroup:
         """Crea (o aggiorna) un gruppo a partire dalla selezione corrente."""
         g = self.get_or_create(name, color)

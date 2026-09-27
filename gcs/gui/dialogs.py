@@ -20,6 +20,13 @@ from PySide6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QForm
 from ..core import occ_utils as ou
 from ..core.entities import NOME_TIPO_IT
 from ..core.opensees_conditions import ElementAssignment, RecorderDefinition
+<<<<<<< HEAD
+=======
+from ..core.opensees_catalog import (
+    ND_MATERIALS, UNIAXIAL_MATERIALS, ELEMENT_CATALOG, get_material_schema,
+)
+from ..core.geotech_catalog import GEOTECH_ELEMENTS, geotech_element_options, is_up_element
+>>>>>>> master
 
 
 class ParamDialog(QDialog):
@@ -1616,7 +1623,20 @@ class OpenSeesFEMDialog(QDialog):
         self.material_tag.setValue(max((item.tag for item in self.manager.materials), default=0) + 1)
         self.material_name = QLineEdit("Materiale_1")
         self.material_model = QComboBox()
+<<<<<<< HEAD
         self.material_model.addItems(self.MATERIAL_FIELDS)
+=======
+        # I materiali geotecnici vengono portati in testa per il workflow soil/u-p.
+        geotech_names = list(GEOTECH_ELEMENTS.keys())
+        material_names = list(dict.fromkeys(
+            ["PressureDependMultiYield02", "PressureDependMultiYield03",
+             "PM4Sand", "PM4Silt", "ManzariDafalias",
+             "J2CyclicBoundingSurface", "FluidSolidPorousMaterial",
+             "PyLiq1", "TzLiq1", "QzLiq1"] +
+            sorted(set(self.MATERIAL_FIELDS) | set(ND_MATERIALS) | set(UNIAXIAL_MATERIALS))
+        ))
+        self.material_model.addItems(material_names)
+>>>>>>> master
         self.material_fields_box = QGroupBox("Parametri costitutivi")
         self.material_fields = QFormLayout(self.material_fields_box)
         form.addRow("Tag materiale", self.material_tag)
@@ -1638,6 +1658,7 @@ class OpenSeesFEMDialog(QDialog):
     def _refresh_material_fields(self):
         while self.material_fields.rowCount():
             self.material_fields.removeRow(0)
+<<<<<<< HEAD
         self.material_parameter_spins = []
         for name in self.MATERIAL_FIELDS[self.material_model.currentText()]:
             spin = self._number(self.material_fields_box)
@@ -1662,6 +1683,38 @@ class OpenSeesFEMDialog(QDialog):
             material = self.manager.add_material(
                 self.material_name.text().strip(), self.material_model.currentText(),
                 [field.value() for field in self.material_parameter_spins],
+=======
+        self.material_parameter_widgets = []
+        model = self.material_model.currentText()
+        schema = get_material_schema(model) or {}
+        params = schema.get("params", [])
+        if not params and model in self.MATERIAL_FIELDS:
+            params = [(name, "float", 0.0, "") for name in self.MATERIAL_FIELDS[model]]
+        for spec in params:
+            name = spec[0]
+            ptype = spec[1] if len(spec) > 1 else "float"
+            default = spec[2] if len(spec) > 2 else 0.0
+            help_text = spec[3] if len(spec) > 3 else ""
+            if ptype == "int":
+                widget = QSpinBox(self.material_fields_box)
+                widget.setRange(-1000000000, 1000000000)
+                widget.setValue(int(default))
+            else:
+                widget = self._number(self.material_fields_box)
+                widget.setValue(float(default))
+            self.material_parameter_widgets.append(widget)
+            label = name + (f" — {help_text}" if help_text else "")
+            self.material_fields.addRow(label, widget)
+        self.material_model.setToolTip(schema.get("notes", ""))
+
+    def _add_material(self):
+        model = self.material_model.currentText()
+        widgets = getattr(self, "material_parameter_widgets", [])
+        try:
+            values = [w.value() for w in widgets]
+            material = self.manager.add_material(
+                self.material_name.text().strip(), model, values,
+>>>>>>> master
                 self.material_tag.value())
         except Exception as exc:
             QMessageBox.warning(self, "Materiale non aggiunto", str(exc))
@@ -1670,6 +1723,11 @@ class OpenSeesFEMDialog(QDialog):
         self.material_name.setText(f"Materiale_{material.tag + 1}")
         self.material_tag.setValue(material.tag + 1)
         self._refresh_material_combo()
+<<<<<<< HEAD
+=======
+        if hasattr(self, "element_command"):
+            self._refresh_element_args()
+>>>>>>> master
 
     def _supported_mesh_entities(self):
         results = []
@@ -1684,7 +1742,11 @@ class OpenSeesFEMDialog(QDialog):
             block = model.blocks.get((dim, block_tag)) if model else None
             element_types = {model.elements[eid][0] for eid in block.element_ids
                              if eid in model.elements} if block else set()
+<<<<<<< HEAD
             if len(element_types) == 1 and next(iter(element_types)) in (1, 2, 3, 4, 5, 11):
+=======
+            if len(element_types) == 1 and next(iter(element_types)) in (1, 2, 3, 4, 5, 10, 11, 17):
+>>>>>>> master
                 results.append((entity, model_name, next(iter(element_types))))
         return results
 
@@ -1697,6 +1759,7 @@ class OpenSeesFEMDialog(QDialog):
             label = f"{model_name}: {entity.name} (Gmsh {gmsh_type}, {entity.meta.get('n_elementi', 0)} elem.)"
             self.element_entity.addItem(label, entity.id)
             self.element_type_by_entity[entity.id] = gmsh_type
+<<<<<<< HEAD
         self.element_ids_filter = QLineEdit()
         self.element_ids_filter.setPlaceholderText("Vuoto = tutto il blocco; oppure ID separati da virgola")
         self.element_material = QComboBox()
@@ -1708,22 +1771,65 @@ class OpenSeesFEMDialog(QDialog):
         dimension_index = {(2, 2): 0, (3, 3): 1, (3, 6): 2}.get(
             (self.manager.ndm, self.manager.ndf), 0)
         self.dimension.setCurrentIndex(dimension_index)
+=======
+
+        self.element_ids_filter = QLineEdit()
+        self.element_ids_filter.setPlaceholderText(
+            "Vuoto = tutto il blocco; oppure ID separati da virgola")
+        self.element_material = QComboBox()
+        self._refresh_material_combo()
+
+        self.element_command = QComboBox()
+        self.element_command.currentIndexChanged.connect(self._on_element_command_changed)
+        self.element_entity.currentIndexChanged.connect(self._refresh_element_commands)
+
+        self.dimension = QComboBox()
+        self.dimension.addItem("2D standard (ndm=2, ndf=2)", (2, 2))
+        self.dimension.addItem("2D u-p (ndm=2, ndf=3)", (2, 3))
+        self.dimension.addItem("3D standard (ndm=3, ndf=3)", (3, 3))
+        self.dimension.addItem("3D u-p (ndm=3, ndf=4)", (3, 4))
+        self.dimension.addItem("3D telaio (ndm=3, ndf=6)", (3, 6))
+        dimension_index = {(2, 2): 0, (2, 3): 1, (3, 3): 2, (3, 4): 3, (3, 6): 4}.get(
+            (self.manager.ndm, self.manager.ndf), 0)
+        self.dimension.setCurrentIndex(dimension_index)
+
+>>>>>>> master
         self.element_area = self._number()
         self.element_area.setValue(1.0)
         self.element_thickness = self._number(minimum=0.0)
         self.element_thickness.setValue(1.0)
         self.plane_type = QComboBox()
         self.plane_type.addItems(("PlaneStress", "PlaneStrain"))
+<<<<<<< HEAD
         form.addRow("Entità geometrica meshata", self.element_entity)
         form.addRow("ID elementi specifici", self.element_ids_filter)
         form.addRow("Materiale", self.element_material)
+=======
+        self.element_args = QLineEdit()
+        self.element_args.setPlaceholderText(
+            "Per u-p: tail Tcl dell'elemento, ad es. 1.0 1 2.2e6 1000 1e-5 1e-5 ...")
+
+        form.addRow("Entità geometrica meshata", self.element_entity)
+        form.addRow("ID elementi specifici", self.element_ids_filter)
+        form.addRow("Materiale", self.element_material)
+        form.addRow("Comando elemento OpenSees", self.element_command)
+>>>>>>> master
         form.addRow("Modello", self.dimension)
         form.addRow("Area truss", self.element_area)
         form.addRow("Spessore 2D", self.element_thickness)
         form.addRow("Comportamento piano", self.plane_type)
+<<<<<<< HEAD
         add = QPushButton("Assegna tipo OpenSees e materiale all'entità")
         add.clicked.connect(self._assign_elements)
         form.addRow(add)
+=======
+        form.addRow("Argomenti u-p / tail Tcl", self.element_args)
+
+        add = QPushButton("Assegna elemento + proprietà fisiche")
+        add.clicked.connect(self._assign_elements)
+        form.addRow(add)
+
+>>>>>>> master
         self.element_list = QListWidget()
         form.addRow("Assegnazioni", self.element_list)
         for assignment in self.manager.element_assignments:
@@ -1731,37 +1837,123 @@ class OpenSeesFEMDialog(QDialog):
                 entity = self.doc.entities.get(assignment.entity_id)
                 label = entity.name if entity else f"Entità {assignment.entity_id}"
                 self.element_list.addItem(
+<<<<<<< HEAD
                     f"{label}: {ElementAssignment.COMMANDS[assignment.gmsh_type]} "
                     f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
         self.tabs.addTab(page, "Elementi")
+=======
+                    f"{label}: {assignment.effective_command()} "
+                    f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
+        self.tabs.addTab(page, "Elementi")
+        self._refresh_element_commands()
+
+    def _refresh_element_commands(self):
+        if not hasattr(self, "element_command"):
+            return
+        entity_id = self.element_entity.currentData()
+        gmsh_type = self.element_type_by_entity.get(entity_id)
+        self.element_command.blockSignals(True)
+        self.element_command.clear()
+        if gmsh_type is not None:
+            defaults = []
+            base = ElementAssignment.COMMANDS.get(gmsh_type)
+            if base:
+                defaults.append(base)
+            # Per gli elementi superiori le alternative arrivano dal catalogo;
+            # la variante u-p deve essere selezionata esplicitamente.
+            if gmsh_type == 17:
+                defaults.append("20NodeBrick")
+            defaults += geotech_element_options(gmsh_type)
+            # Mantieni solo opzioni presenti nel catalogo.
+            options = list(dict.fromkeys(
+                [x for x in defaults if x in ElementAssignment.EXTRA_ELEMENTS or
+                 x in ElementAssignment.COMMANDS.values()]))
+            for name in options:
+                self.element_command.addItem(name, name)
+        self.element_command.blockSignals(False)
+        self._refresh_element_args()
+
+    def _refresh_element_args(self):
+        if not hasattr(self, "element_command"):
+            return
+        command = self.element_command.currentData()
+        if not command:
+            self.element_args.clear()
+            return
+        info = GEOTECH_ELEMENTS.get(command, {})
+        if not info.get("family") == "u-p":
+            self.element_args.clear()
+            return
+        mat_tag = self.element_material.currentData() if hasattr(self, "element_material") else 1
+        defaults = str(info.get("arg_defaults", "")).replace(
+            "{matTag}", str(mat_tag or 1))
+        self.element_args.setText(defaults)
+
+    def _on_element_command_changed(self):
+        command = self.element_command.currentData()
+        info = GEOTECH_ELEMENTS.get(command, {})
+        if info.get("family") == "u-p":
+            target = (info.get("ndm"), info.get("ndf"))
+            index = self.dimension.findData(target)
+            if index >= 0:
+                self.dimension.setCurrentIndex(index)
+        self._refresh_element_args()
+>>>>>>> master
 
     def _refresh_material_combo(self):
         if not hasattr(self, "element_material"):
             return
+<<<<<<< HEAD
+=======
+        self.element_material.blockSignals(True)
+>>>>>>> master
         self.element_material.clear()
         for material in self.manager.materials:
             self.element_material.addItem(
                 f"{material.tag}: {material.name} ({material.model})", material.tag)
+<<<<<<< HEAD
+=======
+        self.element_material.blockSignals(False)
+        if hasattr(self, "element_args"):
+            self._refresh_element_args()
+>>>>>>> master
 
     def _assign_elements(self):
         entity_id = self.element_entity.currentData()
         material_tag = self.element_material.currentData()
+<<<<<<< HEAD
+=======
+        command = self.element_command.currentData()
+>>>>>>> master
         if entity_id is None or material_tag is None:
             QMessageBox.warning(self, "Assegnazione", "Selezionare entità meshata e materiale.")
             return
         gmsh_type = self.element_type_by_entity[entity_id]
         ndm, ndf = self.dimension.currentData()
+<<<<<<< HEAD
         if gmsh_type in (2, 3) and ndm != 2:
             QMessageBox.warning(self, "Dimensione incompatibile", "Triangoli e quadrilateri piani richiedono il modello 2D.")
             return
         if gmsh_type in (4, 5, 11) and ndm != 3:
+=======
+        if gmsh_type in (2, 3, 10) and ndm != 2:
+            QMessageBox.warning(self, "Dimensione incompatibile", "Triangoli/quadrilateri richiedono il modello 2D.")
+            return
+        if gmsh_type in (4, 5, 11, 17) and ndm != 3:
+>>>>>>> master
             QMessageBox.warning(self, "Dimensione incompatibile", "Tetraedri e brick richiedono il modello 3D.")
             return
         material = next(item for item in self.manager.materials if item.tag == material_tag)
         expected_command = "uniaxialMaterial" if gmsh_type == 1 else "nDMaterial"
         if material.command != expected_command:
+<<<<<<< HEAD
             QMessageBox.warning(self, "Materiale incompatibile",
                                 "Truss richiede un materiale uniaxial; gli elementi continui richiedono un materiale nD.")
+=======
+            QMessageBox.warning(
+                self, "Materiale incompatibile",
+                "Truss richiede un materiale uniaxial; gli elementi continui richiedono un materiale nD.")
+>>>>>>> master
             return
         self.manager.ndm, self.manager.ndf = ndm, ndf
         model_name = self.doc.entities[entity_id].meta["mesh_ref"][0]
@@ -1773,18 +1965,31 @@ class OpenSeesFEMDialog(QDialog):
         except ValueError:
             QMessageBox.warning(self, "ID elementi", "Inserire ID interi separati da virgola.")
             return
+<<<<<<< HEAD
+=======
+        element_args = self.element_args.text().strip() if command in GEOTECH_ELEMENTS else ""
+>>>>>>> master
         try:
             assignment = self.manager.assign_entity_elements(
                 entity_id, material_tag, model, self.element_area.value(),
                 self.element_thickness.value(), self.plane_type.currentText(),
+<<<<<<< HEAD
                 selected_element_ids or None)
+=======
+                selected_element_ids or None, command, element_args)
+>>>>>>> master
         except Exception as exc:
             QMessageBox.warning(self, "Assegnazione non valida", str(exc))
             return
         self.element_list.addItem(
+<<<<<<< HEAD
             f"{self.doc.entities[entity_id].name}: {ElementAssignment.COMMANDS[assignment.gmsh_type]} "
             f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
 
+=======
+            f"{self.doc.entities[entity_id].name}: {assignment.effective_command()} "
+            f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
+>>>>>>> master
     def _build_node_tab(self):
         page = QWidget()
         form = QFormLayout(page)
@@ -2493,3 +2698,179 @@ class NodalMassDialog(QDialog):
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Errore", str(exc))
+<<<<<<< HEAD
+=======
+
+
+
+# =============================================================================
+# Browser professionale dei comandi OpenSees
+# =============================================================================
+
+class OpenSeesCommandBrowserDialog(QDialog):
+    """Browser ricercabile del registro OpenSees con provenienza /SRC."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from ..core.opensees_registry import OpenSeesCommandRegistry
+
+        self.registry = OpenSeesCommandRegistry()
+        self.setWindowTitle("OpenSees — Command Browser")
+        self.resize(1050, 650)
+
+        root = QVBoxLayout(self)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Cerca:"))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("nome comando, famiglia, sintassi, SRC…")
+        top.addWidget(self.search, 1)
+        top.addWidget(QLabel("Categoria:"))
+        self.kind = QComboBox()
+        self.kind.addItem("Tutti")
+        self.kind.addItems(self.registry.kinds())
+        top.addWidget(self.kind)
+        root.addLayout(top)
+
+        split = QHBoxLayout()
+        self.list = QListWidget()
+        self.list.setMinimumWidth(360)
+        self.details = QTextEdit()
+        self.details.setReadOnly(True)
+        self.details.setAcceptRichText(False)
+        split.addWidget(self.list, 1)
+        split.addWidget(self.details, 2)
+        root.addLayout(split, 1)
+
+        cov = self.registry.coverage()
+        self.status = QLabel(
+            f"Registro: {cov['total']} voci | "
+            f"schemi/handler disponibili: {cov['implemented']} | "
+            f"repository ufficiale OpenSees/SRC")
+        root.addWidget(self.status)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        copy_btn = QPushButton("Copia sintassi")
+        buttons.addButton(copy_btn, QDialogButtonBox.ActionRole)
+        root.addWidget(buttons)
+
+        self.search.textChanged.connect(self._refresh)
+        self.kind.currentTextChanged.connect(self._refresh)
+        self.list.currentItemChanged.connect(self._show_current)
+        copy_btn.clicked.connect(self._copy_syntax)
+        buttons.rejected.connect(self.reject)
+
+        self._rows = []
+        self._refresh()
+
+    def _refresh(self):
+        rows = self.registry.find(self.search.text(), self.kind.currentText())
+        self._rows = rows
+        self.list.clear()
+        for row in rows:
+            marker = "✓" if row.implemented else "•"
+            self.list.addItem(f"{marker}  {row.name}    [{row.kind}]")
+        if rows:
+            self.list.setCurrentRow(0)
+        else:
+            self.details.setPlainText("Nessun comando corrisponde ai filtri correnti.")
+
+    def _show_current(self, current, _previous=None):
+        if current is None:
+            return
+        i = self.list.row(current)
+        if not (0 <= i < len(self._rows)):
+            return
+        row = self._rows[i]
+        schema = row.schema or {}
+        lines = [
+            f"Comando: {row.name}",
+            f"Categoria: {row.kind}",
+            f"Famiglia: {row.family}",
+            f"Stato nello Studio: {'schema/form disponibile' if row.implemented else 'registro core / gestione generica'}",
+            "",
+            "Sintassi:",
+            row.syntax or "(sintassi dettagliata da specializzare)",
+            "",
+            "Provenienza OpenSees:",
+            row.source,
+            row.source_url,
+            "",
+            "Documentazione:",
+            row.documentation,
+        ]
+        if row.notes:
+            lines.extend(["", "Note:", row.notes])
+        if schema:
+            lines.extend(["", "Schema catalogo:", repr(schema)[:4000]])
+        self.details.setPlainText("\n".join(lines))
+
+    def _copy_syntax(self):
+        item = self.list.currentItem()
+        if item is None:
+            return
+        i = self.list.row(item)
+        if 0 <= i < len(self._rows):
+            QApplication.clipboard().setText(self._rows[i].syntax)
+
+
+class StructuredMeshDialog(QDialog):
+    """Impostazioni per mesh strutturata quad/hex."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Gmsh — Mesh strutturata")
+        self.setMinimumWidth(520)
+        root = QVBoxLayout(self)
+
+        box = QGroupBox("Strategia di discretizzazione")
+        form = QFormLayout(box)
+        self.dimension = QComboBox()
+        self.dimension.addItem("2D — quadrilateri (Transfinite Surface)", 2)
+        self.dimension.addItem("3D — esaedri (Transfinite Volume)", 3)
+        self.nodes_per_curve = QSpinBox()
+        self.nodes_per_curve.setRange(2, 1001)
+        self.nodes_per_curve.setValue(11)
+        self.nodes_per_curve.setToolTip("Numero di nodi su ciascuna curva di bordo")
+        self.recombine = QCheckBox("Ricombina le superfici in quadrilateri")
+        self.recombine.setChecked(True)
+        form.addRow("Dimensione:", self.dimension)
+        form.addRow("Nodi per curva:", self.nodes_per_curve)
+        form.addRow("2D:", self.recombine)
+        root.addWidget(box)
+
+        out_box = QGroupBox("Output")
+        out_lay = QHBoxLayout(out_box)
+        self.output = QLineEdit("modello_structured.msh")
+        self.btn_output = QPushButton("Sfoglia…")
+        self.btn_output.clicked.connect(self._browse)
+        out_lay.addWidget(self.output, 1)
+        out_lay.addWidget(self.btn_output)
+        root.addWidget(out_box)
+
+        info = QLabel(
+            "La geometria corrente viene esportata in STEP e rimessa in Gmsh. "
+            "Per gli esaedri la topologia deve essere transfinite-compatibile "
+            "(tipicamente un blocco/cubo a 6 facce).")
+        info.setWordWrap(True)
+        root.addWidget(info)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        root.addWidget(bb)
+
+    def _browse(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Salva mesh strutturata", self.output.text() or "modello_structured.msh",
+            "Mesh Gmsh (*.msh);;Tutti i file (*)")
+        if path:
+            self.output.setText(path)
+
+    def values(self) -> dict:
+        return {
+            "dimension": int(self.dimension.currentData()),
+            "nodes_per_curve": int(self.nodes_per_curve.value()),
+            "recombine": bool(self.recombine.isChecked()),
+            "output": self.output.text().strip(),
+        }
+>>>>>>> master

@@ -28,8 +28,13 @@ OPENSEES_ELEM_INFO: Dict[int, Tuple[str, str, int, int, str]] = {
     3: ("quad", "element quad", 4, 2, "element quad {eid} {n1} {n2} {n3} {n4} $thick $type $matTag"),
     4: ("FourNodeTetrahedron", "element FourNodeTetrahedron", 4, 3, "element FourNodeTetrahedron {eid} {n1} {n2} {n3} {n4} $matTag"),
     5: ("stdBrick", "element stdBrick", 8, 3, "element stdBrick {eid} {n1} {n2} {n3} {n4} {n5} {n6} {n7} {n8} $matTag"),
+<<<<<<< HEAD
     6: ("Prism6", "element bbarBrick", 6, 3, "element bbarBrick {eid} {n1} {n2} {n3} {n4} {n5} {n6} $matTag"),
     11: ("TenNodeTetrahedron", "element TenNodeTetrahedron", 10, 3, "element TenNodeTetrahedron {eid} {n1} {n2} {n3} {n4} {n5} {n6} {n7} {n8} {n9} {n10} $matTag"),
+=======
+    11: ("TenNodeTetrahedron", "element TenNodeTetrahedron", 10, 3, "element TenNodeTetrahedron {eid} {n1} {n2} {n3} {n4} {n5} {n6} {n7} {n8} {n9} {n10} $matTag"),
+    17: ("20NodeBrickUP", "element 20_8_BrickUP", 20, 3, "element 20_8_BrickUP {eid} ... $matTag"),
+>>>>>>> master
 }
 
 
@@ -200,6 +205,18 @@ def reorder_element_nodes_for_opensees(etype: int, nodes: List[int],
         return reorder_tetrahedron_opensees(nodes, coords)
     elif etype == 5:  # Esaedro 8 nodi
         return reorder_hexahedron_opensees(nodes, coords)
+<<<<<<< HEAD
+=======
+    elif etype == 17:  # Esaedro 20 nodi
+        if len(nodes) < 20:
+            return list(nodes), False
+        corners, inv = reorder_hexahedron_opensees(nodes[:8], coords)
+        mids = list(nodes[8:20])
+        if inv:
+            mids = [mids[i] for i in (3,2,1,0,7,6,5,4,8,11,10,9)]
+            return corners + mids, True
+        return list(nodes), False
+>>>>>>> master
     elif etype == 11:  # Tetraedro 10 nodi
         # Riordina i primi 4 nodi angolari
         t4, inv = reorder_tetrahedron_opensees(nodes[:4], coords)

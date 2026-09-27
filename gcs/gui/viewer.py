@@ -248,6 +248,10 @@ class Viewer3D(QWidget):
         # Pulisci overlay (frecce carichi, etichette)
         self._arrow_ais = []
         self._label_ais = []
+<<<<<<< HEAD
+=======
+        self._mesh_selection_ais = []
+>>>>>>> master
         if self._trihedron and getattr(self._display, "Context", None):
             try:
                 self._display.Context.Display(self._trihedron, False)
@@ -260,6 +264,11 @@ class Viewer3D(QWidget):
         self._disegna_frecce_carichi()
         # Disegna etichette numerazione nodi/elementi (se attive)
         self._disegna_etichette_numerazione()
+<<<<<<< HEAD
+=======
+        # Overlay della selezione mesh: evidenzia gli elementi, non solo il blocco CAD.
+        self._draw_mesh_selection_overlay(update=False)
+>>>>>>> master
         # Update viewer finale
         try:
             ctx = getattr(self._display, "Context", None)
@@ -885,12 +894,19 @@ class Viewer3D(QWidget):
 
     # ------------------------------------------------------------ evidenziazione
     def highlight_selection(self):
+<<<<<<< HEAD
         """Best-effort: evidenzia nel viewer la selezione del documento."""
+=======
+        """Evidenzia selezione CAD e, in modalità Mesh, gli elementi/nodi selezionati."""
+>>>>>>> master
         ctx = getattr(self._display, "Context", None)
         if ctx is None:
             return
         try:
+<<<<<<< HEAD
             # deseleziona tutto, poi riseleziona le entità del documento
+=======
+>>>>>>> master
             try:
                 ctx.ClearSelected(False)
             except Exception:
@@ -902,6 +918,10 @@ class Viewer3D(QWidget):
                         ctx.AddOrRemoveSelected(ais, False)
                     except Exception:
                         pass
+<<<<<<< HEAD
+=======
+            self._draw_mesh_selection_overlay(update=False)
+>>>>>>> master
             try:
                 ctx.UpdateCurrentViewer()
             except Exception:
@@ -909,7 +929,45 @@ class Viewer3D(QWidget):
         except Exception:
             pass
 
+<<<<<<< HEAD
     # ------------------------------------------------------------- menu contestuale
+=======
+    def _clear_mesh_selection_overlay(self):
+        ctx = getattr(self._display, "Context", None)
+        for ais in list(self._mesh_selection_ais):
+            try:
+                ctx.Remove(ais, False)
+            except Exception:
+                pass
+        self._mesh_selection_ais = []
+
+    def _draw_mesh_selection_overlay(self, update=True):
+        """Disegna un overlay trasparente/contrastato sugli elementi mesh selezionati."""
+        if not self._display:
+            return
+        try:
+            self._clear_mesh_selection_overlay()
+            from gcs.core.occ_utils import mesh_elements_shape
+            for model in self.doc.mesh_models.values():
+                if not model.sel_elements:
+                    continue
+                shape = mesh_elements_shape(model, model.sel_elements)
+                if shape is None:
+                    continue
+                try:
+                    ais = self._display.DisplayColoredShape(
+                        shape, color="#FFD166", update=False)
+                except Exception:
+                    ais = self._display.DisplayShape(shape, update=False)
+                if ais is not None:
+                    self._mesh_selection_ais.append(ais)
+            if update:
+                self._display.Context.UpdateCurrentViewer()
+        except Exception:
+            pass
+
+
+>>>>>>> master
     def eventFilter(self, watched, event):
         if watched == self._canvas:
             etype = event.type()

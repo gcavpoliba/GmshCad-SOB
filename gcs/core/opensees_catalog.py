@@ -494,6 +494,18 @@ GMSH_TO_OPENSEES: Dict[int, List[dict]] = {
         {"name": "SSPquad", "n_nodes": 4, "dim": 2, "ndf": 2,
          "args": "type matTag h thickness",
          "desc": "SSPquad - stabilized single-point"},
+<<<<<<< HEAD
+=======
+        {"name": "quadUP", "n_nodes": 4, "dim": 2, "ndf": 3,
+         "args": "thick matTag bulk fmass hPerm vPerm <b1 b2 t>",
+         "desc": "4-node u-p quadrilateral: 2 displacement + pore-pressure DOF"},
+        {"name": "bbarQuadUP", "n_nodes": 4, "dim": 2, "ndf": 3,
+         "args": "thick matTag bulk fmass hPerm vPerm <b1 b2 t>",
+         "desc": "B-Bar 4-node u-p quadrilateral"},
+        {"name": "SSPquadUP", "n_nodes": 4, "dim": 2, "ndf": 3,
+         "args": "matTag thick Kf Rf k1 k2 eVoid alpha <b1 b2>",
+         "desc": "Stabilized single-point 4-node u-p quadrilateral"},
+>>>>>>> master
     ],
     4: [  # Tetraedro 4-nodi
         {"name": "FourNodeTetrahedron", "n_nodes": 4, "dim": 3, "ndf": 3,
@@ -510,12 +522,40 @@ GMSH_TO_OPENSEES: Dict[int, List[dict]] = {
         {"name": "SSPbrick", "n_nodes": 8, "dim": 3, "ndf": 3,
          "args": "matTag h",
          "desc": "SSPbrick - stabilized single-point"},
+<<<<<<< HEAD
+=======
+        {"name": "brickUP", "n_nodes": 8, "dim": 3, "ndf": 4,
+         "args": "matTag bulk rhof permX permY permZ <b1 b2 b3>",
+         "desc": "8-node 3D u-p brick"},
+        {"name": "bbarBrickUP", "n_nodes": 8, "dim": 3, "ndf": 4,
+         "args": "matTag bulk rhof permX permY permZ <b1 b2 b3> [-lumped]",
+         "desc": "B-Bar 8-node 3D u-p brick"},
+        {"name": "SSPbrickUP", "n_nodes": 8, "dim": 3, "ndf": 4,
+         "args": "matTag Kf Rf k1 k2 k3 eVoid alpha <b1 b2 b3> [-lumped]",
+         "desc": "Stabilized single-point 8-node 3D u-p brick"},
+    ],
+    10: [  # Quadrilatero 9-nodi
+        {"name": "9_4_QuadUP", "n_nodes": 9, "dim": 2, "ndf": 3,
+         "args": "type matTag thick bulk fmass hPerm vPerm <b1 b2>",
+         "desc": "9-node / 4-pressure-node u-p quadrilateral"},
+>>>>>>> master
     ],
     11: [  # Tetraedro 10-nodi
         {"name": "TenNodeTetrahedron", "n_nodes": 10, "dim": 3, "ndf": 3,
          "args": "matTag",
          "desc": "Tetraedro quadratico a 10 nodi"},
     ],
+<<<<<<< HEAD
+=======
+    17: [  # Esaedro 20-nodi
+        {"name": "20NodeBrick", "n_nodes": 20, "dim": 3, "ndf": 3,
+         "args": "matTag",
+         "desc": "Brick quadratico 20-nodi standard"},
+        {"name": "20_8_BrickUP", "n_nodes": 20, "dim": 3, "ndf": 4,
+         "args": "matTag bulk rhof permX permY permZ <b1 b2 b3>",
+         "desc": "20-node u-p brick (8 pressure nodes)"},
+    ],
+>>>>>>> master
     # Tipi quad-shell per elementi di shell (aggiunti come pseudo-tipo 31=ShellMITC4)
     31: [  # placeholder per ShellMITC4 (quad 4-nodi shell)
         {"name": "ShellMITC4", "n_nodes": 4, "dim": 2, "ndf": 6,
@@ -629,6 +669,21 @@ ELEMENT_CATALOG: Dict[str, dict] = {
 
 
 # =============================================================================
+<<<<<<< HEAD
+=======
+# 3B. Catalogo geotecnico / u-p
+# =============================================================================
+from .geotech_catalog import (
+    GEOTECH_UNIAXIAL, GEOTECH_ND_MATERIALS, GEOTECH_ELEMENTS,
+    geotech_element_options, is_up_element,
+)
+UNIAXIAL_MATERIALS.update(GEOTECH_UNIAXIAL)
+ND_MATERIALS.update(GEOTECH_ND_MATERIALS)
+ELEMENT_CATALOG.update(GEOTECH_ELEMENTS)
+
+
+# =============================================================================
+>>>>>>> master
 # 4. SECTION (section) - catalogo
 # =============================================================================
 

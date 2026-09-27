@@ -123,8 +123,46 @@ class CADDocument:
         return out
 
     # --------------------------------------------------------------- selezione
+<<<<<<< HEAD
     def set_selection(self, ids, notify=True) -> Set[int]:
         self.selection = {int(i) for i in ids if int(i) in self.entities}
+=======
+    def sync_mesh_selection_from_entities(self, clear=True) -> None:
+        """Sincronizza la selezione mesh con i blocchi geometrici selezionati.
+
+        In modalità Mesh la selezione CAD e quella dei blocchi Gmsh devono
+        rappresentare lo stesso target. Questo evita il vecchio stato
+        disaccoppiato in cui il gruppo risultava selezionato nell'albero ma
+        gli elementi mesh restavano senza feedback visivo.
+        """
+        if clear:
+            for model in self.mesh_models.values():
+                model.clear_selection()
+        for eid in self.selection:
+            ent = self.entities.get(int(eid))
+            if ent is None:
+                continue
+            ref = ent.meta.get("mesh_ref")
+            if not ref:
+                continue
+            model_name, dim, tag = ref
+            model = self.mesh_models.get(model_name)
+            if model is None:
+                continue
+            block = model.blocks.get((dim, tag))
+            if block is None:
+                continue
+            model.sel_blocks.add((dim, tag))
+            model.sel_elements.update(block.element_ids)
+            model.sel_nodes.update(model.nodes_of_elements(block.element_ids))
+
+    def set_selection(self, ids, notify=True) -> Set[int]:
+        self.selection = {int(i) for i in ids if int(i) in self.entities}
+        if self.mode == "mesh" or any(
+                self.entities[i].meta.get("mesh_ref")
+                for i in self.selection if i in self.entities):
+            self.sync_mesh_selection_from_entities(clear=True)
+>>>>>>> master
         if notify:
             self.notify("selection_changed", {"ids": list(self.selection)})
         return self.selection

@@ -16,5 +16,9 @@ Motore macro: comandi personalizzati dichiarati in file ``.py`` (cartella
 punto, curva, superficie, solido o nodo mesh delle entità selezionate.
 """
 
+<<<<<<< HEAD
 __version__ = "1.0.0"
+=======
+__version__ = "1.1.0"
+>>>>>>> master
 __app_name__ = "GmshCAD Studio"

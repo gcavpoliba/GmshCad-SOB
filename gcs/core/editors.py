@@ -290,6 +290,8 @@ class GeometryEditor:
             for s in subs:
                 figlio = Entity(t, shape=s, name=f"{e.name}.{t}")
                 figlio.meta["parent"] = e.id
+                figlio.meta["subshape"] = True
+                figlio.meta["topology_type"] = t
                 figlio.color = gcolor
                 self.doc.add_entity(figlio)
                 nuovi.append(figlio)

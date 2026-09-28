@@ -46,6 +46,28 @@ def test_normalize_target():
         normalize_target("xyz")
 
 
+def test_macro_applicabile_al_tipo_selezionato(doc):
+    def run(ctx, target, params):
+        return None
+
+    specs = [
+        MacroSpec("FaceOp", run, applies_to=("face",)),
+        MacroSpec("SolidOp", run, applies_to=("solid",)),
+        MacroSpec("EntityOp", run, applies_to=("entity",)),
+        MacroSpec("NodeOp", run, applies_to=("mesh_node",)),
+    ]
+    engine = MacroEngine(doc)
+    for spec in specs:
+        engine.register(spec)
+
+    face = Entity("face", name="Face 1")
+    doc.add_entity(face, push_undo=False)
+    doc.set_selection([face.id])
+    names = {s.name for s in engine.applicable_to("face")}
+    assert {"FaceOp", "EntityOp"} <= names
+    assert "SolidOp" not in names
+
+
 def test_macro_su_nodi_mesh(doc, capsys):
     @macro(nome="Jitter test", applies_to=("nodo_mesh",),
            params=[P("k", "float", default=1.0)])

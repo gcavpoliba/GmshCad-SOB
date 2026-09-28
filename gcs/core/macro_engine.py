@@ -283,6 +283,29 @@ class MacroEngine:
     def by_name(self, name: str) -> Optional[MacroSpec]:
         return self.macros.get(name)
 
+    def applicable_to(self, etype: str, selected=None) -> List[MacroSpec]:
+        """Restituisce le macro compatibili con il tipo di entità selezionata."""
+        tipo = str(etype or "").strip().lower()
+        compatibili = {
+            "point": {"point", "entity"},
+            "curve": {"curve", "point", "entity"},
+            "face": {"face", "curve", "point", "entity"},
+            "solid": {"solid", "face", "curve", "point", "entity"},
+            "compound": {"solid", "face", "curve", "point", "entity"},
+            "mesh": {"entity", "mesh_node", "mesh_element"},
+        }.get(tipo, {tipo, "entity"})
+        items = list(selected) if selected is not None else self.doc.selected_entities()
+        out = []
+        for spec in self.macros.values():
+            applies = set(spec.applies_to)
+            if applies.intersection(compatibili):
+                out.append(spec)
+                continue
+            if applies.intersection({"mesh_node", "mesh_element"}) and any(
+                    getattr(e, "is_mesh_block", False) for e in items):
+                out.append(spec)
+        return out
+
     # ------------------------------------------------------- risoluzione bersagli
     def _expand_targets(self, spec: MacroSpec) -> List[MacroTarget]:
         """Espande la selezione corrente nei bersagli richiesti dalla macro."""

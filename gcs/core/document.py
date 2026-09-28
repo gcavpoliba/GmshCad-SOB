@@ -39,6 +39,9 @@ class CADDocument:
         self.parameters: Dict[str, float] = {}
         self.selection: Set[int] = set()
         self.mode: str = "geometria"          # "geometria" | "mesh"
+        # Versione monotona della geometria CAD. Le mesh importate/generated
+        # dichiarano a quale revisione geometrica corrispondono.
+        self.geometry_revision: int = 0
         self.undo_stack: List[Callable] = []
         self.redo_stack: List[Callable] = []
         self.listeners: List[Callable[[str, dict], None]] = []
@@ -63,6 +66,11 @@ class CADDocument:
 
     def add_entity(self, ent: Entity, push_undo=True) -> Entity:
         """Registra una nuova entità nel documento (con undo)."""
+        is_geometry = bool(
+            ent.shape is not None
+            and not ent.is_mesh_block
+            and not ent.meta.get("subshape")
+        )
         ent.id = self._allocate_id()
         self.entities[ent.id] = ent
         self._next_id += 1
@@ -72,11 +80,17 @@ class CADDocument:
             def undo():
                 doc.entities.pop(ent.id, None)
                 doc.selection.discard(ent.id)
+                if is_geometry:
+                    doc._geometry_changed("undo: creazione entità")
 
             def redo():
                 doc.entities[ent.id] = ent
+                if is_geometry:
+                    doc._geometry_changed("redo: creazione entità")
 
             self._push(undo, redo)
+        if is_geometry:
+            self._geometry_changed("creazione geometria")
         self.notify("entity_added", {"id": ent.id})
         return ent
 
@@ -94,13 +108,25 @@ class CADDocument:
             def undo():
                 for i, e in rimossi.items():
                     doc.entities[i] = e
+                if any(e.shape is not None and not e.is_mesh_block
+                       and not e.meta.get("subshape") for e in rimossi.values()):
+                    doc._geometry_changed("undo: eliminazione entità")
 
             def redo():
                 for i in rimossi:
                     doc.entities.pop(i, None)
                     doc.selection.discard(i)
+                if any(e.shape is not None and not e.is_mesh_block
+                       and not e.meta.get("subshape") for e in rimossi.values()):
+                    doc._geometry_changed("redo: eliminazione entità")
 
             self._push(undo, redo)
+        for key, eid in list(self._sub_index.items()):
+            if eid in rimossi:
+                self._sub_index.pop(key, None)
+        if any(e.shape is not None and not e.is_mesh_block
+               and not e.meta.get("subshape") for e in rimossi.values()):
+            self._geometry_changed("eliminazione geometria")
         self.notify("entities_removed", {"ids": list(rimossi)})
         return len(rimossi)
 
@@ -208,6 +234,8 @@ class CADDocument:
         figlio = Entity(t, shape=shape,
                         name=f"{NOME_TIPO_IT[t]} di {parent.name}")
         figlio.meta["parent"] = parent.id
+        figlio.meta["subshape"] = True
+        figlio.meta["topology_type"] = t
         figlio.color = parent.color
         self.add_entity(figlio, push_undo=False)
         if key is not None:
@@ -225,6 +253,8 @@ class CADDocument:
         from .msh_importer import parse_msh
         model = parse_msh(path)
         model.name = nome or os.path.splitext(os.path.basename(path))[0]
+        model.path = path
+        model.mark_current(self.geometry_revision)
         self.mesh_models[model.name] = model
         self._create_mesh_entities(model, path)
         self.mode = "mesh"
@@ -311,13 +341,51 @@ class CADDocument:
 
             def undo():
                 ent.shape = old
+                if not ent.meta.get("subshape") and not ent.is_mesh_block:
+                    doc._geometry_changed("undo: modifica geometria")
 
             def redo():
                 ent.shape = new_shape
+                if not ent.meta.get("subshape") and not ent.is_mesh_block:
+                    doc._geometry_changed("redo: modifica geometria")
 
             self._push(undo, redo)
         ent.shape = new_shape
+        if not ent.meta.get("subshape") and not ent.is_mesh_block:
+            self._geometry_changed("modifica geometria", notify=False)
         self.notify("entity_updated", {"id": ent.id})
+
+    def _geometry_changed(self, reason: str, notify: bool = True) -> int:
+        """Incrementa la revisione CAD e invalida le mesh dipendenti."""
+        self.geometry_revision += 1
+        changed = []
+        for model in self.mesh_models.values():
+            if model.source_geometry_revision is not None:
+                model.mark_stale(reason)
+                changed.append(model.name)
+        if notify and changed:
+            self.notify(
+                "mesh_stale",
+                {
+                    "reason": str(reason),
+                    "geometry_revision": self.geometry_revision,
+                    "models": changed,
+                },
+            )
+        return self.geometry_revision
+
+    def mesh_status(self):
+        """Stato sintetico delle mesh del documento."""
+        return {
+            model.name: {
+                "valid": not model.stale,
+                "stale": model.stale,
+                "reason": model.stale_reason,
+                "source_geometry_revision": model.source_geometry_revision,
+                "current_geometry_revision": self.geometry_revision,
+            }
+            for model in self.mesh_models.values()
+        }
 
     # ====================================================== update parameters
     def set_parameter(self, nome: str, valore: float) -> None:

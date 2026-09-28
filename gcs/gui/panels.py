@@ -7,6 +7,8 @@ import sys
 from typing import List, Optional
 
 from PySide6.QtCore import Qt
+from gcs.core.selection_manager import SelectionManager
+from gcs.core.visibility_manager import VisibilityManager
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QTreeWidget, QTreeWidgetItem, QTableWidget,
@@ -31,11 +33,17 @@ COLORE_TIPO = {
 class EntityTree(QWidget):
     """Albero con gruppi ed entità; doppi click seleziona, checkbox = visibilità."""
 
-    def __init__(self, doc: CADDocument, viewer, parent=None):
+    def __init__(self, doc: CADDocument, viewer,
+                 selection_manager: Optional[SelectionManager] = None,
+                 visibility_manager: Optional[VisibilityManager] = None,
+                 parent=None):
         super().__init__(parent)
         self.doc = doc
         self.viewer = viewer
+        self.selection_manager = selection_manager or SelectionManager(doc)
+        self.visibility_manager = visibility_manager or VisibilityManager(doc, viewer)
         self._updating = False
+        self._entity_items = {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.addWidget(QLabel("Gruppi ed entità"))
@@ -49,6 +57,7 @@ class EntityTree(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self._on_double)
         self.tree.currentItemChanged.connect(self._on_current_item_changed)
+        self.tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         self.tree.itemChanged.connect(self._on_check)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu_contesto)
@@ -67,53 +76,101 @@ class EntityTree(QWidget):
         if self._updating:
             return
         self._updating = True
+        self._entity_items = {}
         try:
+            self.tree.blockSignals(True)
             self.tree.clear()
-            # gruppi
+            children = {}
+            for entity in self.doc.entities.values():
+                parent_id = entity.meta.get("parent")
+                if parent_id is not None and int(parent_id) in self.doc.entities:
+                    children.setdefault(int(parent_id), []).append(entity)
+
+            def build_entity_item(entity, include_fem=True):
+                item = self._entity_item(entity)
+                self._entity_items[int(entity.id)] = item
+                if include_fem:
+                    self._populate_entity_fem(item, entity)
+                for child in sorted(children.get(int(entity.id), []), key=lambda x: x.id):
+                    item.addChild(build_entity_item(child, include_fem=False))
+                return item
+
+            grouped = set()
             for nome, g in self.doc.groups.groups.items():
-                it = QTreeWidgetItem([nome, "Gruppo", ""])
+                it = QTreeWidgetItem([nome, "Gruppo", "", ""])
                 it.setData(0, Qt.UserRole + 1, nome)
                 it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                group_visible = all(self.doc.entities.get(eid).visible
-                                  for eid in g.member_ids if self.doc.entities.get(eid))
-                it.setCheckState(0, Qt.Checked if group_visible else Qt.Unchecked)
+                members = [self.doc.entities[eid] for eid in sorted(g.member_ids)
+                           if eid in self.doc.entities]
+                it.setCheckState(0, Qt.Checked if members and all(e.visible for e in members)
+                                 else Qt.Unchecked)
                 it.setForeground(0, QBrush(QColor("#D08770")))
-                dati = [("geo", eid) for eid in sorted(g.member_ids)]
-                for kind, eid in dati:
-                    e = self.doc.entities.get(eid)
-                    if e:
-                        figlio = self._entity_item(e)
-                        self._populate_entity_fem(figlio, e)
-                        it.addChild(figlio)
+                member_ids = {int(entity.id) for entity in members}
+                for entity in members:
+                    grouped.add(entity.id)
+                    parent_id = entity.meta.get("parent")
+                    if parent_id is not None and int(parent_id) in member_ids:
+                        continue
+                    it.addChild(build_entity_item(entity))
                 for mname, els in g.mesh_elements.items():
-                    figlio = QTreeWidgetItem(
-                        [f"{mname}: {len(els)} elementi", "Mesh", ""])
+                    figlio = QTreeWidgetItem([f"{mname}: {len(els)} elementi", "Mesh", "", ""])
                     figlio.setData(0, Qt.UserRole + 2, mname)
                     figlio.setData(0, Qt.UserRole + 3, sorted(int(e) for e in els))
                     figlio.setToolTip(0, "Doppio click: seleziona gli elementi mesh e i relativi blocchi")
                     figlio.setForeground(0, QBrush(QColor("#81A1C1")))
                     it.addChild(figlio)
                 for mname, nodi in g.mesh_nodes.items():
-                    figlio = QTreeWidgetItem(
-                        [f"{mname}: {len(nodi)} nodi", "Mesh", ""])
+                    figlio = QTreeWidgetItem([f"{mname}: {len(nodi)} nodi", "Mesh", "", ""])
                     figlio.setData(0, Qt.UserRole + 2, mname)
                     figlio.setData(0, Qt.UserRole + 4, sorted(int(n) for n in nodi))
                     figlio.setToolTip(0, "Doppio click: seleziona i nodi mesh e i blocchi associati")
                     figlio.setForeground(0, QBrush(QColor("#81A1C1")))
                     it.addChild(figlio)
                 self.tree.addTopLevelItem(it)
-            # entità non in gruppi
-            in_gruppi = set()
-            for g in self.doc.groups.groups.values():
-                in_gruppi |= g.member_ids
-            for e in sorted(self.doc.entities.values(), key=lambda x: x.id):
-                if e.id not in in_gruppi:
-                    item = self._entity_item(e)
-                    self._populate_entity_fem(item, e)
-                    self.tree.addTopLevelItem(item)
+
+            for entity in sorted(self.doc.entities.values(), key=lambda x: x.id):
+                if entity.id in grouped or entity.meta.get("parent") is not None:
+                    continue
+                self.tree.addTopLevelItem(build_entity_item(entity))
+
             self.tree.expandToDepth(2)
+            self._sync_tree_selection()
         finally:
+            self.tree.blockSignals(False)
             self._updating = False
+
+    def _sync_tree_selection(self):
+        """Allinea la selezione Qt al Document Entity ID."""
+        self.tree.blockSignals(True)
+        try:
+            selected = {int(i) for i in self.doc.selection}
+            first = None
+            for eid, item in self._entity_items.items():
+                item.setSelected(eid in selected)
+                if eid in selected and first is None:
+                    first = item
+                    parent = item.parent()
+                    while parent is not None:
+                        parent.setExpanded(True)
+                        parent = parent.parent()
+            if first is not None:
+                self.tree.setCurrentItem(first)
+        finally:
+            self.tree.blockSignals(False)
+
+    def _on_tree_selection_changed(self):
+        if self._updating:
+            return
+        ids = set()
+        for item in self.tree.selectedItems():
+            if item.data(0, Qt.UserRole + 5) != "entity":
+                continue
+            eid = item.data(0, Qt.UserRole)
+            if eid is not None:
+                ids.add(int(eid))
+        if ids != set(self.doc.selection):
+            self.selection_manager.set_context("cad")
+            self.selection_manager.set_selection(ids)
 
     def _entity_item(self, e) -> QTreeWidgetItem:
         fem_marks = e.meta.get("fem_marks", [])
@@ -126,6 +183,7 @@ class EntityTree(QWidget):
             status,
         ])
         it.setData(0, Qt.UserRole, e.id)
+        it.setData(0, Qt.UserRole + 5, "entity")
         it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
         it.setCheckState(0, Qt.Checked if e.visible else Qt.Unchecked)
         fem_color = e.meta.get("fem_color")
@@ -137,8 +195,6 @@ class EntityTree(QWidget):
         it.setToolTip(3, status)
         if fem_marks:
             it.setToolTip(0, "Associazioni FEM: " + "; ".join(fem_marks))
-        if e.id in self.doc.selection:
-            it.setBackground(0, QBrush(QColor("#434C5E")))
         return it
 
     def _entity_groups(self, entity_id):
@@ -152,6 +208,10 @@ class EntityTree(QWidget):
         if manager is None:
             return "CAD"
         ref = entity.meta.get("mesh_ref")
+        if ref:
+            model = self.doc.mesh_models.get(str(ref[0]))
+            if model is not None and model.stale:
+                return "⚠ STALE"
         assignments = [a for a in manager.element_assignments
                        if int(a.entity_id) == int(entity.id)]
         if ref and not assignments:
@@ -631,7 +691,8 @@ class EntityTree(QWidget):
 
         eid = item.data(0, Qt.UserRole)
         if eid is not None:
-            self.doc.set_selection([eid])
+            self.selection_manager.set_context("cad")
+            self.selection_manager.set_selection([eid])
             assignment_ids = item.data(0, Qt.UserRole + 7) or []
             model_name = item.data(0, Qt.UserRole + 6)
             if assignment_ids and model_name:
@@ -676,7 +737,9 @@ class EntityTree(QWidget):
                 eids.add(doc_eid)
             elif block and set(block.element_ids).intersection(model.sel_elements):
                 eids.add(doc_eid)
-        self.doc.set_selection(eids or self.doc.selection)
+        if eids:
+            self.selection_manager.set_context("mesh")
+            self.selection_manager.set_selection(eids)
         self.viewer.highlight_selection()
         self.refresh()
 
@@ -685,11 +748,8 @@ class EntityTree(QWidget):
             return
         eid = item.data(0, Qt.UserRole)
         if eid is not None:
-            e = self.doc.get(eid)
-            if e:
-                visible = item.checkState(0) == Qt.Checked
-                e.set_visible(visible)
-                self.viewer.redraw_all(fit=False)
+            visible = item.checkState(0) == Qt.Checked
+            self.visibility_manager.set_entity_visible(eid, visible)
             return
         gname = item.data(0, Qt.UserRole + 1)
         if gname:
@@ -698,15 +758,8 @@ class EntityTree(QWidget):
                 self._set_visibility_for_entities(group.member_ids, item.checkState(0) == Qt.Checked)
 
     def _set_visibility_for_entities(self, entity_ids, visible):
-        changed = 0
-        for eid in entity_ids:
-            e = self.doc.entities.get(int(eid))
-            if e is not None:
-                e.set_visible(visible)
-                changed += 1
-        self.viewer.redraw_all(fit=False)
-        self.refresh()
-        return changed
+        return self.visibility_manager.set_entities_visible(entity_ids, visible)
+
 
     def _toggle_all_visibility(self, visible):
         changed = self._set_visibility_for_entities(self.doc.entities.keys(), visible)
@@ -922,7 +975,8 @@ class EntityTree(QWidget):
 
     def _select_fem_assignment(self, assignment):
         entity_id = int(assignment.entity_id)
-        self.doc.set_selection([entity_id])
+        self.selection_manager.set_context("mesh")
+        self.selection_manager.set_selection([entity_id])
         model = self.doc.mesh_models.get(assignment.model_name)
         if model is not None:
             model.sel_elements = {int(x) for x in assignment.element_ids}
@@ -936,12 +990,12 @@ class EntityTree(QWidget):
         self.refresh()
 
     def _select(self, eid):
-        self.doc.set_selection([eid])
+        self.selection_manager.set_context("cad")
+        self.selection_manager.set_selection([eid])
         self.viewer.highlight_selection()
 
     def _isolate(self, eid):
-        for e in self.doc.entities.values():
-            e.visible = (e.id == eid)
+        self.visibility_manager.isolate_entities([eid])
         self.viewer.redraw_all(fit=True)
 
 
@@ -993,6 +1047,14 @@ class PropertiesPanel(QWidget):
         for e in enti[:20]:
             self._add_row("—", f"{e.name} (id {e.id})")
             self._add_row("   tipo", NOME_TIPO_IT.get(e.etype, e.etype))
+            parent_id = e.meta.get("parent")
+            if parent_id is not None:
+                parent = self.doc.entities.get(int(parent_id))
+                if parent is not None:
+                    self._add_row(
+                        "   parent",
+                        f"{NOME_TIPO_IT.get(parent.etype, parent.etype)} "
+                        f"{parent.name} (id {parent.id})")
             if e.shape is not None:
                 try:
                     bb = ou.bbox_of(e.shape)
@@ -1038,8 +1100,8 @@ class PropertiesPanel(QWidget):
             win = self.window()
             if hasattr(win, "viewer"):
                 win.viewer.redraw_all(fit=False)
-            if hasattr(win, "panel_tree"):
-                win.panel_tree.refresh()
+            if hasattr(win, "tree_panel"):
+                win.tree_panel.refresh()
 
     def _on_apply_fix(self):
         enti = self.doc.selected_entities()

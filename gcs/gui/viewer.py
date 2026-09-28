@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QMenu
 
 from gcs.core.document import CADDocument
 from gcs.core import occ_utils as ou
+from gcs.core.selection_manager import SelectionManager
+from gcs.core.visibility_manager import VisibilityManager
 
 try:
     from OCC.Display import backend as _occ_backend
@@ -62,14 +64,21 @@ class Viewer3D(QWidget):
     """Viewer 3D AIS sincronizzato con un CADDocument."""
 
     selection_picked = Signal(list)          # lista di id entità selezionate a mouse
+    hover_info = Signal(str)
     #: (entità trascinata, dx, dy, dz in coordinate modello) — editing col mouse
     entity_dragged = Signal(int, float, float, float)
     entity_moved = Signal(int, float, float, float)   # fine trascinamento (commit)
 
-    def __init__(self, doc: CADDocument, parent=None):
+    def __init__(self, doc: CADDocument, selection_manager: Optional[SelectionManager] = None,
+                 visibility_manager: Optional[VisibilityManager] = None, parent=None):
         super().__init__(parent)
         self.doc = doc
+        self.selection_manager = selection_manager or SelectionManager(doc)
+        self.visibility_manager = visibility_manager or VisibilityManager(doc)
+        self.visibility_manager.attach_viewer(self)
         self.ais_by_entity: Dict[int, object] = {}
+        self._trihedron_active = True
+        self.selection_filter = "all"
         self._canvas = None
         self._display = None
         self._trihedron = None
@@ -249,7 +258,7 @@ class Viewer3D(QWidget):
         self._arrow_ais = []
         self._label_ais = []
         self._mesh_selection_ais = []
-        if self._trihedron and getattr(self._display, "Context", None):
+        if self._trihedron and self._trihedron_active and getattr(self._display, "Context", None):
             try:
                 self._display.Context.Display(self._trihedron, False)
             except Exception:
@@ -270,6 +279,7 @@ class Viewer3D(QWidget):
                 ctx.UpdateCurrentViewer()
         except Exception:
             pass
+        self.highlight_selection()
         if fit:
             self.fit_all()
 
@@ -281,7 +291,11 @@ class Viewer3D(QWidget):
         **simbolo di vincolo** (triangolo/cerchio/quadrato) sul primo nodo:
         è la visualizzazione dell'associazione richiesta (stile STKO).
         """
-        if not self._display or not ent.visible:
+        if not self._display or not self.visibility_manager.is_entity_visible(ent):
+            return
+        # Le sotto-entità materializzate per il tree non duplicano il renderer:
+        # vengono mostrate solo quando sono la selezione corrente.
+        if ent.meta.get("subshape") and ent.id not in self.doc.selection:
             return
         shape = self._shape_for(ent)
         if shape is None:
@@ -501,7 +515,7 @@ class Viewer3D(QWidget):
         Questi numeri sono tag mesh/Gmsh e NON sono i tag OpenSees. Il toggle è controllato da `show_node_labels`
         e `show_element_labels`.
         """
-        if not self._display:
+        if not self._display or not self.visibility_manager.is_mesh_visible():
             return
         try:
             from OCC.Core.AIS import AIS_TextLabel
@@ -683,6 +697,30 @@ class Viewer3D(QWidget):
                 pass
 
     # ------------------------------------------------------------ viste/camere
+    def fit_selection(self) -> bool:
+        """Adatta la vista alla sola selezione senza perdere lo stato di visibilità."""
+        selected = {int(i) for i in self.doc.selection}
+        if not selected or not self._display:
+            return False
+        original = {
+            int(e.id): bool(e.visible)
+            for e in self.doc.entities.values()
+            if not e.is_mesh_block
+        }
+        try:
+            for e in self.doc.entities.values():
+                if e.is_mesh_block:
+                    continue
+                e.visible = e.id in selected
+            self.redraw_all(fit=True)
+            return True
+        finally:
+            for eid, visible in original.items():
+                ent = self.doc.entities.get(eid)
+                if ent is not None:
+                    ent.visible = visible
+            self.redraw_all(fit=False)
+
     def fit_all(self):
         if self._display:
             try:
@@ -704,6 +742,23 @@ class Viewer3D(QWidget):
                 self.fit_all()
             except Exception:
                 pass
+
+    def set_trihedron_active(self, active: bool):
+        self._trihedron_active = bool(active)
+        if not self._driver_ready or not self._display or self._trihedron is None:
+            return
+        try:
+            if self._trihedron_active:
+                self._display.Context.Display(self._trihedron, False)
+            else:
+                self._display.Context.Erase(self._trihedron, False)
+            self._display.Context.UpdateCurrentViewer()
+        except Exception:
+            pass
+
+    def toggle_trihedron(self) -> bool:
+        self.set_trihedron_active(not self._trihedron_active)
+        return self._trihedron_active
 
     def set_wireframe(self, on: bool):
         if not self._display:
@@ -846,21 +901,33 @@ class Viewer3D(QWidget):
 
     # ------------------------------------------------------------- selezione
     def _on_canvas_selection(self, shapes):
-        """Sincronizza la selezione del canvas con il documento."""
+        """Sincronizza il pick AIS con la selezione logica globale."""
         ids = set()
         for shape in shapes or []:
             ent_id = self._resolve_shape_owner(shape)
             if ent_id is not None:
+                ent = self.doc.entities.get(int(ent_id))
+                if ent is None:
+                    continue
+                if self.selection_filter != "all" and ent.etype != self.selection_filter:
+                    continue
                 ids.add(ent_id)
-        if ids != set(self.doc.selection):
-            self.doc.set_selection(ids)
+        self.selection_manager.set_context("cad")
+        self.selection_manager.set_selection(ids)
         self.selection_picked.emit(sorted(ids))
 
+    def set_selection_filter(self, etype: str):
+        value = str(etype or "all").strip().lower()
+        valid = {"all", "point", "curve", "face", "solid"}
+        if value not in valid:
+            value = "all"
+        self.selection_filter = value
+
+
     def _resolve_shape_owner(self, shape) -> Optional[int]:
-        """Mappa una shape selezionata all'entità del documento."""
+        """Risolvi una shape cliccata nell'Entity ID più specifico."""
         if shape is None:
             return None
-        # 1) match esatto
         for eid, e in self.doc.entities.items():
             s = self._shape_for(e)
             if s is not None:
@@ -869,26 +936,60 @@ class Viewer3D(QWidget):
                         return eid
                 except Exception:
                     continue
-        # 2) sotto-shape: cerca il proprietario che la contiene
         try:
-            for eid, e in self.doc.entities.items():
-                s = self._shape_for(e)
-                if s is None:
-                    continue
-                try:
-                    mappa = ou.map_subshapes(s, shape.ShapeType())
-                    for cand in mappa:
-                        if cand.IsSame(shape):
-                            return eid
-                except Exception:
-                    continue
+            key = (shape.TShape(), shape.Location())
+            eid = self.doc._sub_index.get(key)
+            if eid in self.doc.entities:
+                return int(eid)
         except Exception:
             pass
-        return None
+        try:
+            from OCC.Core.TopAbs import (
+                TopAbs_VERTEX, TopAbs_EDGE, TopAbs_WIRE,
+                TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID,
+            )
+            type_map = {
+                TopAbs_VERTEX: "point",
+                TopAbs_EDGE: "curve",
+                TopAbs_WIRE: "curve",
+                TopAbs_FACE: "face",
+                TopAbs_SHELL: "face",
+                TopAbs_SOLID: "solid",
+            }
+            target_type = type_map.get(shape.ShapeType())
+        except Exception:
+            return None
+        if target_type is None:
+            return None
+        candidates = []
+        for eid, e in self.doc.entities.items():
+            if e.is_mesh_block:
+                continue
+            s = self._shape_for(e)
+            if s is None:
+                continue
+            try:
+                mappa = ou.map_subshapes(s, shape.ShapeType())
+                if any(cand.IsSame(shape) for cand in mappa):
+                    is_child = bool(e.meta.get("subshape"))
+                    dim = e.dim if e.dim is not None else -1
+                    candidates.append((1 if is_child else 0, -int(dim), int(eid), e))
+            except Exception:
+                continue
+        if not candidates:
+            return None
+        _, _, parent_id, parent = sorted(candidates, key=lambda x: x[:3])[0]
+        try:
+            child = self.doc.find_or_create_sub_entity(parent, target_type, shape)
+            child.meta.setdefault("subshape", True)
+            child.meta.setdefault("topology_type", target_type)
+            return child.id
+        except Exception:
+            return parent_id
 
-    # ------------------------------------------------------------ evidenziazione
+
     def highlight_selection(self):
-        """Evidenzia selezione CAD e, in modalità Mesh, gli elementi/nodi selezionati."""
+        """Evidenzia la selezione globale del document model."""
         ctx = getattr(self._display, "Context", None)
         if ctx is None:
             return
@@ -898,7 +999,13 @@ class Viewer3D(QWidget):
             except Exception:
                 pass
             for eid in self.doc.selection:
+                ent = self.doc.entities.get(int(eid))
+                if ent is None or not self.visibility_manager.is_entity_visible(ent):
+                    continue
                 ais = self.ais_by_entity.get(eid)
+                if ais is None:
+                    self.display_entity(ent, fit=False)
+                    ais = self.ais_by_entity.get(eid)
                 if ais is not None:
                     try:
                         ctx.AddOrRemoveSelected(ais, False)
@@ -912,6 +1019,7 @@ class Viewer3D(QWidget):
         except Exception:
             pass
 
+
     def _clear_mesh_selection_overlay(self):
         ctx = getattr(self._display, "Context", None)
         for ais in list(self._mesh_selection_ais):
@@ -924,6 +1032,9 @@ class Viewer3D(QWidget):
     def _draw_mesh_selection_overlay(self, update=True):
         """Disegna un overlay trasparente/contrastato sugli elementi mesh selezionati."""
         if not self._display:
+            return
+        if not self.visibility_manager.is_mesh_visible():
+            self._clear_mesh_selection_overlay()
             return
         try:
             self._clear_mesh_selection_overlay()
@@ -947,10 +1058,45 @@ class Viewer3D(QWidget):
             pass
 
 
+    def _hover_text_for(self, entity) -> str:
+        if entity is None:
+            return ""
+        text = f"{entity.etype.capitalize()} | ID: {entity.id}"
+        try:
+            if entity.etype == "face" and entity.shape is not None:
+                text += f" | Area: {ou.area_of(entity.shape):.4g}"
+            elif entity.etype == "curve" and entity.shape is not None:
+                text += f" | Length: {ou.length_of(entity.shape):.4g}"
+            elif entity.etype == "solid" and entity.shape is not None:
+                text += f" | Volume: {ou.volume_of(entity.shape):.4g}"
+        except Exception:
+            pass
+        parent_id = entity.meta.get("parent")
+        if parent_id is not None:
+            parent = self.doc.entities.get(int(parent_id))
+            if parent is not None:
+                text += f" | Parent: {parent.name}"
+        return text
+
+    def _update_hover_info(self, pos):
+        if not self._display or not getattr(self._display, "Context", None):
+            self.hover_info.emit("")
+            return
+        try:
+            self._display.Context.MoveTo(pos.x(), pos.y(), self._display.View)
+            shape = self._display.Context.DetectedShape()
+            eid = self._resolve_shape_owner(shape) if shape is not None else None
+            ent = self.doc.entities.get(eid) if eid is not None else None
+            self.hover_info.emit(self._hover_text_for(ent))
+        except Exception:
+            self.hover_info.emit("")
+
     def eventFilter(self, watched, event):
         if watched == self._canvas:
             etype = event.type()
-            if etype == QEvent.MouseButtonPress:
+            if etype == QEvent.MouseMove:
+                self._update_hover_info(event.pos())
+            elif etype == QEvent.MouseButtonPress:
                 if event.button() == Qt.RightButton:
                     self._rclick_press_pos = event.pos()
             elif etype == QEvent.MouseButtonRelease:
@@ -963,6 +1109,25 @@ class Viewer3D(QWidget):
                         self._show_viewport_context_menu(gpos, event.pos())
                         return True
         return super().eventFilter(watched, event)
+
+    def _zoom_selection(self):
+        if not self.doc.selection:
+            return
+        try:
+            self.highlight_selection()
+            self.fit_all()
+        except Exception:
+            pass
+
+    def _set_selected_visibility(self, visible):
+        self.visibility_manager.set_entities_visible(self.doc.selection, visible)
+
+    def _isolate_selection(self):
+        selected = {int(i) for i in self.doc.selection}
+        if not selected:
+            return
+        self.visibility_manager.isolate_entities(selected)
+        self.redraw_all(fit=True)
 
     def _show_viewport_context_menu(self, global_pos, click_pos):
         menu = QMenu(self)
@@ -1009,8 +1174,16 @@ class Viewer3D(QWidget):
                 m_tr.addAction("Scala…", win.act_scala_dialog)
             menu.addSeparator()
 
+            menu.addSeparator()
+            menu.addAction("Zoom su selezione", lambda: self._zoom_selection())
+            menu.addAction("Isola selezione", lambda: self._isolate_selection())
+            menu.addAction("Mostra selezione", lambda: self._set_selected_visibility(True))
+            menu.addAction("Nascondi selezione", lambda: self._set_selected_visibility(False))
+            menu.addAction("Crea gruppo dalla selezione…",
+                           lambda: win.act_gruppo_da_selezione()
+                           if hasattr(win, "act_gruppo_da_selezione") else None)
             menu.addAction("Isola entità", lambda: self._isolate(ent.id))
-            menu.addAction("Deseleziona tutto", lambda: self.doc.set_selection([]))
+            menu.addAction("Deseleziona tutto", lambda: self.selection_manager.clear_selection(context="cad"))
         else:
             menu.addAction("Configura Solutore e Fasi OpenSees…", self._open_analysis_dialog)
             menu.addAction("Esporta per OpenSees…", lambda: win.act_export_opensees() if hasattr(win, "act_export_opensees") else None)
@@ -1030,10 +1203,10 @@ class Viewer3D(QWidget):
         if dlg.exec():
             self.redraw_all(fit=False)
             win = self.window()
-            if hasattr(win, "panel_tree"):
-                win.panel_tree.refresh()
-            if hasattr(win, "panel_props"):
-                win.panel_props.refresh()
+            if hasattr(win, "tree_panel"):
+                win.tree_panel.refresh()
+            if hasattr(win, "props_panel"):
+                win.props_panel.refresh()
 
     def _open_fix(self, eids):
         from .dialogs import OpenSeesFixDialog
@@ -1056,12 +1229,13 @@ class Viewer3D(QWidget):
         dlg.exec()
 
     def _isolate(self, eid):
-        for e in self.doc.entities.values():
-            e.visible = (e.id == eid)
+        self.visibility_manager.isolate_entities([eid])
         self.redraw_all(fit=True)
         win = self.window()
-        if hasattr(win, "panel_tree"):
-            win.panel_tree.refresh()
+        if hasattr(win, "tree_panel"):
+            win.tree_panel.refresh()
+        if hasattr(win, "props_panel"):
+            win.props_panel.refresh()
 
 
 class NullViewer:

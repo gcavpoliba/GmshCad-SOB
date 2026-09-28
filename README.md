@@ -234,6 +234,20 @@ Campioni pronti in `samples/`: `bracket_22.msh` e `bracket_41.msh`
 `superfici_carico`, `lato_fisso`, `struttura`). Rigenerabili con
 `python samples/make_samples.py`.
 
+## UX / CAD-CAE workspace redesign
+
+L'interfaccia è organizzata attorno a un workflow CAD/CAE condiviso, senza duplicare il nucleo OpenCASCADE/Gmsh/OpenSees.
+
+- **CAD workspace**: creazione, modifica, trasformazioni, solid modeling, misura e validazione.
+- **Mesh workspace**: import/generazione, ispezione di elementi/nodi, gruppi fisici, overlay e collegamento al FEM OpenSees.
+- **Model browser**: selezione bidirezionale viewport ↔ tree, gerarchia padre/sotto-entità, visibilità e proprietà contestuali.
+- **SelectionManager / VisibilityManager**: stato condiviso per selezione e visibilità CAD/Mesh.
+- **Command line**: HELP, POINT, LINE, CIRCLE, BOX, SPHERE, MOVE, ROTATE, SCALE, SELECT, WORKSPACE, VIEW, ZOOM, GRID, SNAP, WIRE, MESH, GROUP, MACRO, SAVE e VALIDATE, con history, completion, alias ed Escape.
+- **Persistent UI state**: layout dei dock, workspace, filtro di selezione, grid e snap vengono salvati tramite QSettings.
+- **Mesh validity**: le mesh associate a una revisione geometrica vengono marcate STALE dopo modifiche CAD; una mesh stale viene nascosta nel viewer e non può essere usata per export OpenSees finché non viene rigenerata/reimportata.
+
+La documentazione di progetto è in docs/ARCHITECTURE_AUDIT.md e docs/MANUAL_VALIDATION_CHECKLIST.md.
+
 ## Architettura
 
 ```
@@ -248,7 +262,7 @@ gmsh-cad-studio/
 │   │   ├── msh_importer.py #   parser .msh 2.2/4.1 ASCII
 │   │   ├── groups.py       #   gruppi (geometria e mesh)
 │   │   ├── selectors.py    #   motore di selezione (+ query fluenti)
-│   │   ├── document.py     #   documento: entità, undo/redo, import/export
+│   │   ├── document.py     #   documento: entità, undo/redo, import/export, mesh validity
 │   │   ├── builder.py      #   modalità geometria: creazione
 │   │   ├── editors.py      #   modalità geometria: modifica/editing
 │   │   ├── macro_engine.py #   motore macro @macro + parametri
@@ -257,8 +271,9 @@ gmsh-cad-studio/
 │   │   └── demo.py         #   demo end-to-end headless
 │   ├── gui/
 │   │   ├── viewer.py       #   viewer 3D AIS (qtViewer3d) + fallback
-│   │   ├── main_window.py  #   finestra principale, menu, toolbar, modalità
-│   │   ├── panels.py       #   albero entità, proprietà, console, log, macro
+│   │   ├── main_window.py  #   workspace, menu, toolbar, command line
+│   │   ├── panels.py       #   model tree, proprietà, console, log, macro
+│   │   ├── command_line.py #   command line CAD/CAE
 │   │   └── dialogs.py      #   dialog parametri auto-generato
 │   ├── macros/             # 5 macro di esempio (vedi sotto)
 │   └── user_commands.py    # comandi rapidi per la console

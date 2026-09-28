@@ -85,6 +85,10 @@ class MeshModel:
     def __init__(self, name: str, path: Optional[str] = None):
         self.name = name
         self.path = path
+        # Revisione della geometria che ha generato/importato questa mesh.
+        self.source_geometry_revision: Optional[int] = None
+        self.stale: bool = False
+        self.stale_reason: str = ""
         self.nodes: Dict[int, Tuple[float, float, float]] = {}
         self.elements: Dict[int, Tuple[int, List[int]]] = {}
         self.blocks: Dict[Tuple[int, int], MeshBlock] = {}
@@ -112,6 +116,19 @@ class MeshModel:
 
     def block_of_element(self, eid: int) -> Optional[Tuple[int, int]]:
         return self._elem_block.get(eid)
+
+    @property
+    def validity_label(self) -> str:
+        return "STALE" if self.stale else "VALID"
+
+    def mark_stale(self, reason: str = "geometria modificata") -> None:
+        self.stale = True
+        self.stale_reason = str(reason)
+
+    def mark_current(self, geometry_revision: Optional[int] = None) -> None:
+        self.source_geometry_revision = geometry_revision
+        self.stale = False
+        self.stale_reason = ""
 
     def stats(self) -> dict:
         """Statistiche riassuntive della mesh."""

@@ -13,11 +13,11 @@ from __future__ import annotations
 import os
 import traceback
 
-from PySide6.QtCore import Qt, QProcess
+from PySide6.QtCore import Qt, QProcess, QSettings
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QDialog, QMainWindow, QDockWidget, QTabWidget, QToolBar,
                                QMessageBox, QFileDialog, QInputDialog, QLabel,
-                               QStatusBar, QApplication, QColorDialog)
+                               QStatusBar, QApplication, QColorDialog, QComboBox)
 
 from gcs import __app_name__, __version__
 from gcs.core.document import CADDocument, DocumentError
@@ -25,10 +25,14 @@ from gcs.core.builder import GeometryBuilder
 from gcs.core.editors import GeometryEditor
 from gcs.core import selectors as sel
 from gcs.core import gmsh_bridge as gb
+from gcs.core import occ_utils as ou
 from gcs.core.macro_engine import MacroEngine, write_macro_template
+from gcs.core.selection_manager import SelectionManager
+from gcs.core.visibility_manager import VisibilityManager
 from gcs.gui.viewer import Viewer3D, NullViewer
 from gcs.gui.panels import (EntityTree, PropertiesPanel, ConsolePanel,
                             LogPanel, MacroPanel, OpenSeesFlowPanel)
+from gcs.gui.command_line import CommandLineWidget, CommandSpec
 from gcs.gui.dialogs import ParamDialog
 
 
@@ -42,14 +46,24 @@ class MainWindow(QMainWindow):
         self.doc = CADDocument()
         self.builder = GeometryBuilder(self.doc)
         self.editor = GeometryEditor(self.doc)
+        self.selection_manager = SelectionManager(self.doc)
         self.engine = MacroEngine(self.doc, log=self._log)
+        self.macro_engine = self.engine
 
         # ---------- widget centrale (viewer 3D con fallback senza display)
         try:
-            self.viewer = Viewer3D(self.doc)
+            self.visibility_manager = VisibilityManager(self.doc)
+            self.viewer = Viewer3D(
+                self.doc,
+                selection_manager=self.selection_manager,
+                visibility_manager=self.visibility_manager,
+            )
+            self.visibility_manager.attach_viewer(self.viewer)
             self.setCentralWidget(self.viewer)
         except Exception as exc:
+            self.visibility_manager = VisibilityManager(self.doc)
             self.viewer = NullViewer()
+            self.visibility_manager.attach_viewer(self.viewer)
             placeholder = QLabel(
                 "Viewer 3D non disponibile in questo ambiente:\n" + str(exc) +
                 "\n\nAvviare l'applicazione da un ambiente desktop grafico.")
@@ -66,11 +80,17 @@ class MainWindow(QMainWindow):
                 self.viewer.entity_dragged.connect(self._on_entity_dragged)
                 self.viewer.entity_moved.connect(self._on_entity_moved)
                 self.viewer.selection_picked.connect(self._on_selection_picked)
+                self.viewer.hover_info.connect(self._on_hover_info)
             except Exception:
                 pass  # NullViewer non ha questi signal
 
         # ---------- dock
-        self.tree_panel = EntityTree(self.doc, self.viewer)
+        self.tree_panel = EntityTree(
+            self.doc,
+            self.viewer,
+            selection_manager=self.selection_manager,
+            visibility_manager=self.visibility_manager,
+        )
         self.props_panel = PropertiesPanel(self.doc)
         self.log_panel = LogPanel()
         self.macro_panel = MacroPanel(self.engine)
@@ -99,9 +119,28 @@ class MainWindow(QMainWindow):
         d3 = QDockWidget("Console e macro", self)
         d3.setWidget(tabs)
         self.addDockWidget(Qt.BottomDockWidgetArea, d3)
+
+        self.command_line = CommandLineWidget()
+        self._command_dock = QDockWidget("Command line", self)
+        self._command_dock.setWidget(self.command_line)
+        self._command_dock.setFeatures(
+            QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._command_dock)
+        self.splitDockWidget(self._command_dock, d3, Qt.Vertical)
+        self.command_line.command_issued.connect(self.command_line.execute)
+        self.command_line.command_finished.connect(self._on_command_finished)
+        self.command_line.cancelled.connect(
+            lambda: self._log("Command line: operazione annullata"))
+
         d1.resize(320, 500)
+        self._dock_tree = d1
+        self._dock_flow = self.flow_dock
+        self._dock_props = d2
+        self._dock_console = d3
+        self._dock_command = self._command_dock
 
         # ---------- menu e toolbar
+        self._setup_command_registry()
         self._build_menus()
         self._build_toolbars()
         self._set_mode("geometria")
@@ -111,342 +150,337 @@ class MainWindow(QMainWindow):
         sb.addWidget(self._status_left)
         sb.addPermanentWidget(self._status_right)
         self.setStatusBar(sb)
+        self._restore_ui_state()
         self._carica_macro()
         self._refresh_all()
 
     # ================================================================ costruzione UI
     def _build_menus(self):
+        """Organizza i comandi reali secondo workflow CAD/CAE."""
         mb = self.menuBar()
 
-        # ----- File
         m = mb.addMenu("&File")
-        m.addAction(self._act("Importa &mesh .msh…", self.act_importa_msh, "Ctrl+I"))
-        m.addAction(self._act("Importa STEP/IGES/BREP…", self.act_importa_cad))
+        m.addAction(self._act("Importa CAD…", self.act_importa_cad, "Ctrl+O"))
+        m.addAction(self._act("Importa mesh .msh…", self.act_importa_msh, "Ctrl+I"))
         m.addSeparator()
-        m.addAction(self._act("Esporta &STEP…", self.act_export_step, "Ctrl+E"))
-        m.addAction(self._act("Esporta mesh .msh (gruppi fisici)…", self.act_export_msh))
+        m.addAction(self._act("Esporta STEP…", self.act_export_step, "Ctrl+E"))
+        m.addAction(self._act("Esporta BREP…", self._export_brep_command))
+        m.addAction(self._act("Esporta mesh .msh…", self.act_export_msh))
         m.addAction(self._act("Esporta template .geo…", self.act_export_geo))
         m.addSeparator()
-        m.addAction(self._act("Esporta per &OpenSees (nodi e connettività)…",
-                              self.act_export_opensees, "Ctrl+Shift+O"))
-        m.addSeparator()
-        m.addAction(self._act("&Mesha il modello selezionato (gmsh)…",
-                              self.act_mesha, "Ctrl+M"))
-        m.addAction(self._act("Mesha strutturato quad/hex (Gmsh)…",
-                              self.act_mesha_structured, "Ctrl+Shift+M"))
+        m.addAction(self._act("Esporta OpenSees…", self.act_export_opensees, "Ctrl+Shift+O"))
         m.addSeparator()
         m.addAction(self._act("Chiudi", self.close, "Ctrl+Q"))
 
-        # ----- Modifica
-        m = mb.addMenu("&Modifica")
-        m.addAction(self._act("&Annulla", self.act_undo, "Ctrl+Z"))
-        m.addAction(self._act("&Ripeti", self.act_redo, "Ctrl+Y"))
+        m = mb.addMenu("&Edit")
+        m.addAction(self._act("Undo", self.act_undo, "Ctrl+Z"))
+        m.addAction(self._act("Redo", self.act_redo, "Ctrl+Y"))
         m.addSeparator()
-        m.addAction(self._act("&Elimina selezione", self.act_elimina, "Del"))
-        m.addAction(self._act("&Duplica selezione", self.act_duplica, "Ctrl+D"))
-        m.addSeparator()
-        trasla = m.addMenu("Traslazione")
-        for ax, label in (("dx", "X+"), ("dx", "X-"), ("dy", "Y+"), ("dy", "Y-"),
-                          ("dz", "Z+"), ("dz", "Z-")):
-            segno = 1.0 if label.endswith("+") else -1.0
-            trasla.addAction(self._act(
-                f"{label} di 5", lambda chk=False, a=ax, s=segno:
-                self.editor.trasla(self.doc.selection, *(s * 5 if a == k else 0
-                                                        for k in ("dx", "dy", "dz")))))
-        m.addAction(self._act("Traslazione personalizzata…", self.act_trasla_dialog))
-        m.addAction(self._act("Rotazione…", self.act_ruota_dialog))
-        m.addAction(self._act("Scala…", self.act_scala_dialog))
-        m.addAction(self._act("Specchia…", self.act_specchia_dialog))
-        m.addSeparator()
-        m.addAction(self._act("Fusione (union)…", self.act_fusa))
-        m.addAction(self._act("Taglio (A - B)…", self.act_taglio))
-        m.addAction(self._act("Intersezione…", self.act_inter))
-        m.addAction(self._act("Raccorda spigoli…", self.act_raccorda))
-        m.addAction(self._act("Smussa spigoli…", self.act_smussa))
-        m.addAction(self._act("Svuota (cavity)…", self.act_svuota))
-        m.addAction(self._act("Offset…", self.act_offset))
-        m.addSeparator()
-        m.addAction(self._act("Esplodi in superfici", self.act_esplodi_facce))
-        m.addAction(self._act("Esplodi in curve", self.act_esplodi_curve))
-        m.addAction(self._act("Esplodi in punti", self.act_esplodi_punti))
+        m.addAction(self._act("Elimina selezione", self.act_elimina, "Del"))
+        m.addAction(self._act("Duplica selezione", self.act_duplica, "Ctrl+D"))
+        t = m.addMenu("Transform")
+        t.addAction(self._act("Move…", self.act_trasla_dialog, "M"))
+        t.addAction(self._act("Rotate…", self.act_ruota_dialog, "R"))
+        t.addAction(self._act("Scale…", self.act_scala_dialog, "S"))
+        t.addAction(self._act("Mirror…", self.act_specchia_dialog))
+        t.addAction(self._act("Offset…", self.act_offset))
+        b = m.addMenu("Solid Modeling")
+        b.addAction(self._act("Union", self.act_fusa))
+        b.addAction(self._act("Difference", self.act_taglio))
+        b.addAction(self._act("Intersection", self.act_inter))
+        b.addAction(self._act("Fillet", self.act_raccorda))
+        b.addAction(self._act("Chamfer", self.act_smussa))
+        b.addAction(self._act("Cavity", self.act_svuota))
+        e = m.addMenu("Explode")
+        e.addAction(self._act("Faces", self.act_esplodi_facce))
+        e.addAction(self._act("Edges / Curves", self.act_esplodi_curve))
+        e.addAction(self._act("Vertices / Points", self.act_esplodi_punti))
 
-        # ----- Selezione
-        m = mb.addMenu("&Selezione")
-        m.addAction(self._act("Tutto", lambda: sel.select_all(self.doc), "Ctrl+A"))
-        m.addAction(self._act("Nessuno", lambda: sel.select_none(self.doc),
-                              "Ctrl+Shift+A"))
-        m.addAction(self._act("Inverti", lambda: sel.invert_selection(self.doc)))
-        m.addSeparator()
-        for t, lab in (("point", "Punti"), ("curve", "Curve"),
-                       ("face", "Superfici"), ("solid", "Solidi")):
-            m.addAction(self._act(lab, lambda chk=False, tt=t:
-                                  sel.select_by_type(self.doc, tt)))
-        m.addAction(self._act("Per nome…", self.act_sel_nome))
-        m.addAction(self._act("Per gruppo…", self.act_sel_gruppo))
-        m.addAction(self._act("Per tag fisico…", self.act_sel_marker))
-        m.addAction(self._act("Per colore…", self.act_sel_colore))
-        m.addSeparator()
-        m.addAction(self._act("In parallelepipedo…", self.act_sel_box))
-        m.addAction(self._act("In sfera…", self.act_sel_sfera))
-        m.addAction(self._act("Semi-spazio rispetto a piano…", self.act_sel_piano))
-        m.addAction(self._act("Le N più vicine a un punto…", self.act_sel_vicine))
-        m.addSeparator()
-        m.addAction(self._act("Per dimensione (area/lunghezza/volume)…",
-                              self.act_sel_dimensione))
-        m.addAction(self._act("Superfici piane", lambda: sel.select_planar(self.doc)))
-        m.addAction(self._act("Superfici curve", lambda: sel.select_curved(self.doc)))
-        m.addAction(self._act("Per direzione della normale…", self.act_sel_normale))
-        m.addAction(self._act("Le N più piccole…", self.act_sel_piccole))
-        m.addAction(self._act("Le N più grandi…", self.act_sel_grandi))
-        m.addSeparator()
-        m.addAction(self._act("Espandi selezione", lambda: sel.grow_selection(self.doc),
-                              "Ctrl+G"))
-        m.addAction(self._act("Riduci selezione", lambda: sel.shrink_selection(self.doc),
-                              "Ctrl+Shift+G"))
-        m.addAction(self._act("Componente connessa", lambda: sel.select_connected(self.doc)))
-        m.addSeparator()
-        m.addAction(self._act("Punti della selezione", lambda: sel.select_vertices_of(self.doc)))
-        m.addAction(self._act("Curve della selezione", lambda: sel.select_edges_of(self.doc)))
-        m.addAction(self._act("Superfici della selezione", lambda: sel.select_faces_of(self.doc)))
-        m.addAction(self._act("Bordo delle superfici", lambda: sel.select_boundary(self.doc)))
-
-        # ----- Gruppi
-        m = mb.addMenu("&Gruppi")
-        m.addAction(self._act("Crea gruppo dalla selezione…",
-                              self.act_gruppo_da_selezione, "Ctrl+Shift+N"))
-        m.addAction(self._act("Aggiungi selezione a gruppo…", self.act_aggiungi_gruppo))
-        m.addAction(self._act("Rimuovi selezione da gruppo…", self.act_rimuovi_gruppo))
-        m.addSeparator()
-        m.addAction(self._act("Gruppo automatico: superfici piane",
-                              self.act_gruppo_piane))
-        m.addAction(self._act("Gruppo automatico: superfici curve",
-                              self.act_gruppo_curve))
-        m.addAction(self._act("Gruppo automatico: per tag fisico…",
-                              self.act_gruppo_marker))
-        m.addSeparator()
-        m.addAction(self._act("Rinomina gruppo…", self.act_rinomina_gruppo))
-        m.addAction(self._act("Elimina gruppo…", self.act_elimina_gruppo))
-        m.addAction(self._act("Esporta elenco gruppi…", self.act_export_gruppi))
-        m.addAction(self._act("Esporta nodi gruppi (OpenSees .txt)…",
-                              self.act_export_opensees_gruppi))
-
-        # ----- OpenSees
-        m_os = mb.addMenu("&OpenSees")
-        m_os.addAction(self._act("Esporta per &OpenSees (bundle completo)…",
-                                self.act_export_opensees, "Ctrl+Shift+O"))
-        m_os.addAction(self._act("Esporta script OpenSees (fasi e parametri)…",
-                    self.act_export_phase_model))
-        m_os.addAction(self._act("Configura &Solutore e Fasi (Gravity / Elastoplastica)…",
-                                self.act_opensees_solver_stages))
-        m_os.addAction(self._act("Workflow Fasi / comandi Tcl…", self.act_show_opensees_flow))
-        m_os.addAction(self._act("Modello FEM: materiali, elementi, nodi e recorder…",
-                    self.act_opensees_fem))
-        m_os.addAction(self._act("Valida modello OpenSees…",
-                    self.act_validate_opensees_model))
-        m_os.addAction(self._act("Esegui script Tcl con OpenSees…",
-                    self.act_run_opensees))
-        m_os.addSeparator()
-        m_os.addAction(self._act("Associa &Vincolo (fix) a gruppi o selezione…",
-                                self.act_opensees_fix))
-        m_os.addAction(self._act("Associa &Carico (load) a gruppi o selezione…",
-                                self.act_opensees_load))
-        m_os.addAction(self._act("Associa &EqualDOF (multi-point constraint)…",
-                                self.act_opensees_equaldof))
-        m_os.addAction(self._act("Rimuovi vincolo / EqualDOF…",
-                                self.act_remove_opensees_constraint))
-        m_os.addAction(self._act("Rimuovi interfaccia…",
-                                self.act_remove_opensees_interface))
-        m_os.addSeparator()
-        # --- Nuovi comandi estesi (catalogo allargato) ---
-        m_os_cat = m_os.addMenu("Catalogo esteso")
-        m_os_cat.addAction(self._act("Definisci sezione (section)…",
-                                       self.act_define_section))
-        m_os_cat.addAction(self._act("Definisci geomTransf…",
-                                       self.act_define_geom_transf))
-        m_os_cat.addAction(self._act("Definisci beamIntegration…",
-                                       self.act_define_beam_integration))
-        m_os_cat.addAction(self._act("Definisci carico su elemento (eleLoad)…",
-                                       self.act_define_ele_load))
-        m_os_cat.addAction(self._act("Definisci region (con rayleigh opzionale)…",
-                                       self.act_define_region))
-        m_os_cat.addAction(self._act("Browser comandi OpenSees…",
-                                       self.act_opensees_command_browser))
-        m_os.addSeparator()
-        # --- Parametri (updateParameter, setParameter, updateMaterials) ---
-        m_os_param = m_os.addMenu("Parametri (update)")
-        m_os_param.addAction(self._act("Definisci parameter (element/node/pattern)…",
-                                         self.act_define_parameter))
-        m_os_param.addAction(self._act("setParameter (batch elementi)…",
-                                         self.act_set_parameter))
-        m_os_param.addAction(self._act("updateMaterials (state change)…",
-                                         self.act_update_materials))
-        m_os_param.addAction(self._act("Update parameters globali…",
-                                         self.act_update_parameters))
-        m_os_param.addAction(self._act("Smorzamento Rayleigh…",
-                                         self.act_set_rayleigh))
-        m_os_param.addAction(self._act("Massa nodale…",
-                                         self.act_add_nodal_mass))
-        m_os.addSeparator()
-        # --- Fasi (PhaseManager unificato) ---
-        m_os_phase = m_os.addMenu("Fasi (update model)")
-        m_os_phase.addAction(self._act("Nuova fase…", self.act_nuova_fase))
-        m_os_phase.addAction(self._act("Cambia fase corrente…", self.act_cambia_fase))
-        m_os_phase.addAction(self._act("Mostra fasi", self.act_mostra_fasi))
-        m_os_phase.addAction(self._act("Assegna proprietà elemento…",
-                                         self.act_assegna_proprieta))
-        m_os_phase.addAction(self._act("Assegna vincolo fase…",
-                                         self.act_assegna_vincolo))
-        m_os_phase.addAction(self._act("Pacchetto solutore fase…",
-                                         self.act_solver_pack))
-        m_os_phase.addAction(self._act("Bridge fasi → OpenSeesManager",
-                                         self.act_bridge_phases))
-        m_os.addSeparator()
-        m_os.addAction(self._act("Esporta nodi gruppi (OpenSees .txt)…",
-                                self.act_export_opensees_gruppi))
-
-        # ----- Modalità
-        m = mb.addMenu("&Modalità")
-        self._mgeo = self._act("Modalità &Geometria", lambda: self._set_mode("geometria"))
-        self._mgeo.setCheckable(True)
-        self._mmesh = self._act("Modalità &Mesh", lambda: self._set_mode("mesh"))
-        self._mmesh.setCheckable(True)
-        m.addAction(self._mgeo)
-        m.addAction(self._mmesh)
-
-        # ----- Macro
-        m = mb.addMenu("M&acro")
-        m.addAction(self._act("Ricarica macro da cartella", self._carica_macro, "F5"))
-        m.addAction(self._act("Nuova macro da template…", self.act_nuova_macro))
-        m.addAction(self._act("Apri cartella macro…", self.act_apri_cartella_macro))
-        self._menu_macro = m.addMenu("Esegui macro…")
-        self._menu_macro.aboutToShow.connect(self._riempi_menu_macro)
-
-        # ----- Vista
-        m = mb.addMenu("&Vista")
-        for v in ("iso", "front", "top", "right", "left", "bottom", "back"):
-            m.addAction(self._act(f"Vista {v}", lambda chk=False, vv=v:
-                                  self.viewer.vista(vv)))
-        m.addAction(self._act("Adatta tutto", self.viewer.fit_all, "Home"))
-        m.addAction(self._act("Wireframe / Ombreggiato",
-                              self.act_toggle_wireframe, "W"))
-        m.addAction(self._act("Mostra/Nascondi griglia quadrettata",
-                              self.act_toggle_grid, "G"))
-        m.addSeparator()
-        # --- Visualizzazione: mesh e simbologia OpenSees ---
-        m_vis = m.addMenu("Visualizzazione Mesh / OpenSees")
-        self._act_node_labels = self._act("Etichette nodi mesh",
-                                            self.act_toggle_node_labels)
+        m = mb.addMenu("&View")
+        for v in ("iso","front","top","right","left","bottom","back"):
+            m.addAction(self._act(
+                f"Vista {v}", lambda checked=False,vv=v:self.viewer.vista(vv)))
+        m.addAction(self._act("Zoom Extents", self.viewer.fit_all, "Home"))
+        m.addAction(self._act("Fit Selection", self._fit_selection, "F"))
+        m.addAction(self._act("Wireframe / Shaded", self.act_toggle_wireframe, "W"))
+        self._act_grid = self._act("Grid", self.act_toggle_grid, "G")
+        self._act_grid.setCheckable(True)
+        self._act_grid.setChecked(bool(getattr(self.viewer,"_grid_active",True)))
+        m.addAction(self._act_grid)
+        self._act_trihedron = self._act(
+            "Axes / Trihedron", self.act_toggle_trihedron)
+        self._act_trihedron.setCheckable(True)
+        self._act_trihedron.setChecked(
+            bool(getattr(self.viewer, "_trihedron_active", True)))
+        m.addAction(self._act_trihedron)
+        m.addAction(self._act("Snap", self.act_toggle_snap))
+        m.addAction(self._act("Snap step…", self.act_set_snap_step))
+        vis = m.addMenu("Visibility")
+        cad = vis.addMenu("CAD / OpenCASCADE")
+        self._cad_visibility_actions = {}
+        for label,etype in (("Vertices","point"),("Edges / Curves","curve"),
+                             ("Surfaces","face"),("Solids","solid")):
+            a=self._act(label,lambda checked=False,t=etype:
+                        self._set_cad_type_visibility(t,checked))
+            a.setCheckable(True)
+            a.setChecked(self.visibility_manager.is_cad_type_visible(etype))
+            cad.addAction(a)
+            self._cad_visibility_actions[etype]=a
+        cad.addSeparator()
+        cad.addAction(self._act("Show all CAD",lambda:self._set_all_cad_visibility(True)))
+        cad.addAction(self._act("Hide all CAD",lambda:self._set_all_cad_visibility(False)))
+        cad.addAction(self._act("Invert CAD",self._invert_cad_visibility))
+        meshv=vis.addMenu("Mesh / Gmsh")
+        self._act_mesh_visible=self._act("Mesh blocks",self.act_toggle_mesh_visibility)
+        self._act_mesh_visible.setCheckable(True)
+        self._act_mesh_visible.setChecked(self.visibility_manager.is_mesh_visible())
+        meshv.addAction(self._act_mesh_visible)
+        self._act_node_labels=self._act("Node labels",self.act_toggle_node_labels)
         self._act_node_labels.setCheckable(True)
-        m_vis.addAction(self._act_node_labels)
-        self._act_elem_labels = self._act("Etichette elementi mesh (M<id>)",
-                                            self.act_toggle_element_labels)
+        meshv.addAction(self._act_node_labels)
+        self._act_elem_labels=self._act("Element labels",self.act_toggle_element_labels)
         self._act_elem_labels.setCheckable(True)
-        m_vis.addAction(self._act_elem_labels)
-        m_vis.addSeparator()
-        m_vis.addAction(self._act("Mostra tutte le entità CAD", lambda: self._set_all_cad_visibility(True)))
-        m_vis.addAction(self._act("Nascondi tutte le entità CAD", lambda: self._set_all_cad_visibility(False)))
-        m_vis.addAction(self._act("Inverti visibilità entità CAD", self._invert_cad_visibility))
-        self._act_load_arrows = self._act("Frecce carichi nodali",
-                                            self.act_toggle_load_arrows)
+        meshv.addAction(self._act_elem_elem_labels) if False else meshv.addAction(self._act_elem_labels)
+        osv=vis.addMenu("OpenSees")
+        self._act_load_arrows=self._act("Load arrows",self.act_toggle_load_arrows)
         self._act_load_arrows.setCheckable(True)
         self._act_load_arrows.setChecked(True)
-        m_vis.addAction(self._act_load_arrows)
-        self._act_constraint_sym = self._act("Simboli vincoli",
-                                               self.act_toggle_constraint_symbols)
+        osv.addAction(self._act_load_arrows)
+        self._act_constraint_sym=self._act(
+            "Constraint symbols",self.act_toggle_constraint_symbols)
         self._act_constraint_sym.setCheckable(True)
         self._act_constraint_sym.setChecked(True)
-        m_vis.addAction(self._act_constraint_sym)
-        m.addSeparator()
-        # --- Snapping ---
-        self._act_snap = self._act("Snapping a griglia/vertici",
-                                     self.act_toggle_snap)
-        self._act_snap.setCheckable(True)
-        self._act_snap.setChecked(True)
-        m.addAction(self._act_snap)
-        m.addAction(self._act("Imposta step griglia snap…",
-                                self.act_set_snap_step))
+        osv.addAction(self._act_constraint_sym)
 
-        # ----- Aiuto
-        m = mb.addMenu("&Aiuto")
-        m.addAction(self._act("Guida rapida", self.act_guida))
-        m.addAction(self._act("Comandi di selezione", self.act_guida_selezione))
-        m.addAction(self._act("Informazioni", self.act_info))
+        m = mb.addMenu("&Geometry")
+        cr=m.addMenu("Create")
+        for k,label in (
+            ("punto","Point"),("linea","Line"),("spline","Spline"),
+            ("cerchio","Circle"),("arco","Arc"),("superficie","Surface"),
+            ("rettangolo","Rectangle"),("box","Box"),("cilindro","Cylinder"),
+            ("sfera","Sphere"),("cono","Cone"),("toro","Torus")):
+            cr.addAction(self._act(
+                label,lambda checked=False,kk=k:self._crea_dialog(kk)))
+        cr.addSeparator()
+        cr.addAction(self._act("Extrude…",self.act_estrudi_dialog))
+        cr.addAction(self._act("Revolve…",self.act_rivolgi_dialog))
+        m.addSeparator()
+        for label,action in (
+            ("Move…",self.act_trasla_dialog),("Rotate…",self.act_ruota_dialog),
+            ("Scale…",self.act_scala_dialog),("Mirror…",self.act_specchia_dialog),
+            ("Offset…",self.act_offset),("Measure",self._measure_selection),
+            ("Geometry validation",self._geometry_validation),
+            ("Import STEP/IGES/BREP…",self.act_importa_cad),
+            ("Export STEP…",self.act_export_step),
+        ):
+            m.addAction(self._act(label,action))
+
+        m = mb.addMenu("&Mesh")
+        m.addAction(self._act("Import .msh…",self.act_importa_msh))
+        m.addAction(self._act("Generate mesh…",self.act_mesha,"Ctrl+M"))
+        m.addAction(self._act(
+            "Structured quad/hex…",self.act_mesha_structured,"Ctrl+Shift+M"))
+        ins=m.addMenu("Mesh Inspection")
+        for label,action in (
+            ("All elements",lambda:self._mesh_action("all")),
+            ("Elements in box…",lambda:self._mesh_action("box")),
+            ("Elements in sphere…",lambda:self._mesh_action("sfera")),
+            ("By physical group…",lambda:self._mesh_action("fisico")),
+            ("Grow",lambda:self._mesh_action("grow")),
+            ("Shrink",lambda:self._mesh_action("shrink")),
+            ("Nodes of selection",lambda:self._mesh_action("nodi")),
+        ):
+            ins.addAction(self._act(label,action))
+        m.addSeparator()
+        m.addAction(self._act("Export .msh…",self.act_export_msh))
+        m.addAction(self._act("OpenSees FEM assignment…",self.act_opensees_fem))
+
+        m=mb.addMenu("Physical &Groups")
+        for label,action in (
+            ("Create from selection…",self.act_gruppo_da_selezione),
+            ("Add selection to group…",self.act_aggiungi_gruppo),
+            ("Remove selection from group…",self.act_rimuovi_gruppo),
+            ("Automatic: planar surfaces",self.act_gruppo_piane),
+            ("Automatic: curved surfaces",self.act_gruppo_curve),
+            ("By physical tag…",self.act_gruppo_marker),
+            ("Mesh group from selection…",self.act_gruppo_mesh),
+            ("Rename…",self.act_rinomina_gruppo),
+            ("Delete…",self.act_elimina_gruppo),
+            ("Export group list…",self.act_export_gruppi),
+            ("Export OpenSees nodes…",self.act_export_opensees_gruppi),
+        ):
+            m.addAction(self._act(label,action))
+
+        m=mb.addMenu("&Tools")
+        sm=m.addMenu("Selection")
+        sm.addAction(self._act("All",lambda:sel.select_all(self.doc),"Ctrl+A"))
+        sm.addAction(self._act("None",lambda:sel.select_none(self.doc),"Ctrl+Shift+A"))
+        sm.addAction(self._act("Invert",lambda:sel.invert_selection(self.doc)))
+        for t,label in (("point","Points"),("curve","Curves"),
+                        ("face","Surfaces"),("solid","Solids")):
+            sm.addAction(self._act(label,lambda checked=False,tt=t:
+                                   sel.select_by_type(self.doc,tt)))
+        for label,action in (
+            ("By name…",self.act_sel_nome),("By group…",self.act_sel_gruppo),
+            ("By physical tag…",self.act_sel_marker),("By color…",self.act_sel_colore),
+            ("In box…",self.act_sel_box),("In sphere…",self.act_sel_sfera),
+            ("By plane half-space…",self.act_sel_piano),("Nearest N…",self.act_sel_vicine),
+            ("By size…",self.act_sel_dimensione),("By normal…",self.act_sel_normale),
+            ("Smallest N…",self.act_sel_piccole),("Largest N…",self.act_sel_grandi),
+        ):
+            sm.addAction(self._act(label,action))
+        sm.addSeparator()
+        sm.addAction(self._act("Grow",lambda:sel.grow_selection(self.doc),"Ctrl+G"))
+        sm.addAction(self._act("Shrink",lambda:sel.shrink_selection(self.doc),"Ctrl+Shift+G"))
+        sm.addAction(self._act("Connected component",lambda:sel.select_connected(self.doc)))
+        mac=m.addMenu("Macros")
+        mac.addAction(self._act("Reload",self._carica_macro,"F5"))
+        mac.addAction(self._act("New macro…",self.act_nuova_macro))
+        mac.addAction(self._act("Open macro folder…",self.act_apri_cartella_macro))
+        self._menu_macro=mac.addMenu("Run macro…")
+        self._menu_macro.aboutToShow.connect(self._riempi_menu_macro)
+
+        osmenu=m.addMenu("OpenSees / CAE")
+        for label,action in (
+            ("FEM model…",self.act_opensees_fem),
+            ("Solver and stages…",self.act_opensees_solver_stages),
+            ("Workflow phases / Tcl…",self.act_show_opensees_flow),
+            ("Validate model…",self.act_validate_opensees_model),
+            ("Run Tcl…",self.act_run_opensees),
+            ("Fix…",self.act_opensees_fix),("Loads…",self.act_opensees_load),
+            ("EqualDOF…",self.act_opensees_equaldof),
+        ):
+            osmenu.addAction(self._act(label,action))
+        adv=osmenu.addMenu("Advanced catalog")
+        for label,action in (
+            ("Command browser…",self.act_opensees_command_browser),
+            ("Section…",self.act_define_section),("geomTransf…",self.act_define_geom_transf),
+            ("beamIntegration…",self.act_define_beam_integration),
+            ("eleLoad…",self.act_define_ele_load),("region…",self.act_define_region),
+            ("parameter…",self.act_define_parameter),("setParameter…",self.act_set_parameter),
+            ("updateMaterials…",self.act_update_materials),("Rayleigh damping…",self.act_set_rayleigh),
+            ("Nodal mass…",self.act_add_nodal_mass),
+        ):
+            adv.addAction(self._act(label,action))
+        ph=adv.addMenu("Stages / phases")
+        for label,action in (
+            ("New phase…",self.act_nuova_fase),("Change phase…",self.act_cambia_fase),
+            ("Assign phase property…",self.act_assegna_proprieta),
+            ("Assign phase constraint…",self.act_assegna_vincolo),
+        ):
+            ph.addAction(self._act(label,action))
+
+        m=mb.addMenu("&Window")
+        for dock in (self._dock_tree,self._dock_flow,self._dock_props,
+                     self._dock_command,self._dock_console):
+            m.addAction(dock.toggleViewAction())
+
+        m=mb.addMenu("&Settings")
+        self._act_settings_snap=self._act("Snap enabled",self.act_toggle_snap)
+        self._act_settings_snap.setCheckable(True)
+        self._act_settings_snap.setChecked(True)
+        m.addAction(self._act_settings_snap)
+        self._act_settings_grid=self._act("Grid enabled",self.act_toggle_grid)
+        self._act_settings_grid.setCheckable(True)
+        self._act_settings_grid.setChecked(True)
+        m.addAction(self._act_settings_grid)
+        m.addSeparator()
+        m.addAction(self._act("Save UI layout",self._save_ui_state))
+        m.addAction(self._act("Restore saved UI layout",self._restore_ui_state))
+        m.addAction(self._act("Reset UI layout",self._reset_ui_layout))
+
+        m=mb.addMenu("&Help")
+        m.addAction(self._act("Quick guide",self.act_guida))
+        m.addAction(self._act("Selection commands",self.act_guida_selezione))
+        m.addAction(self._act("Keyboard / Command line",self._show_command_help))
+        m.addAction(self._act("About",self.act_info))
 
     def _build_toolbars(self):
-        # ----- toolbar creazione (modalità geometria)
-        tb = QToolBar("Creazione geometria")
-        tb.setObjectName("toolbar_creazione")
-        tb.addAction(self._act("Punto", lambda: self._crea_dialog("punto")))
-        tb.addAction(self._act("Linea", lambda: self._crea_dialog("linea")))
-        tb.addAction(self._act("Spline", lambda: self._crea_dialog("spline")))
-        tb.addAction(self._act("Cerchio", lambda: self._crea_dialog("cerchio")))
-        tb.addAction(self._act("Arco", lambda: self._crea_dialog("arco")))
-        tb.addAction(self._act("Superficie da punti", lambda: self._crea_dialog("superficie")))
-        tb.addAction(self._act("Rettangolo", lambda: self._crea_dialog("rettangolo")))
+        tbw=QToolBar("Workspace",self)
+        tbw.setObjectName("toolbar_workspace")
+        tbw.setMovable(False)
+        tbw.addWidget(QLabel(" Workspace: "))
+        self._workspace_combo=QComboBox()
+        self._workspace_combo.addItems(["CAD","Mesh"])
+        self._workspace_combo.currentTextChanged.connect(
+            lambda v:self._set_mode("mesh" if v=="Mesh" else "geometria"))
+        tbw.addWidget(self._workspace_combo)
+        tbw.addSeparator()
+        tbw.addAction(self._act("Undo",self.act_undo,"Ctrl+Z"))
+        tbw.addAction(self._act("Redo",self.act_redo,"Ctrl+Y"))
+        tbw.addAction(self._act("Delete",self.act_elimina,"Del"))
+        tbw.addSeparator()
+        tbw.addAction(self._act("Fit",self.viewer.fit_all,"Home"))
+        tbw.addAction(self._act("Fit Selection",self._fit_selection,"F"))
+        tbw.addAction(self._act("Iso",lambda:self.viewer.vista("iso")))
+        tbw.addSeparator()
+        tbw.addWidget(QLabel(" Filter: "))
+        self._selection_filter_combo=QComboBox()
+        self._selection_filter_combo.addItems(["All","Points","Curves","Surfaces","Solids"])
+        self._selection_filter_combo.currentTextChanged.connect(
+            self._on_selection_filter_changed)
+        tbw.addWidget(self._selection_filter_combo)
+        tbw.addSeparator()
+        tbw.addAction(self._act("Command line",self._focus_command_line))
+        self.addToolBar(tbw)
+        self._tb_workspace=tbw
+
+        tb=QToolBar("CAD · Create / Modify",self)
+        tb.setObjectName("toolbar_cad")
+        for k,label in (("punto","Point"),("linea","Line"),("spline","Spline"),
+                        ("cerchio","Circle"),("arco","Arc"),("rettangolo","Rectangle"),
+                        ("box","Box"),("cilindro","Cylinder"),("sfera","Sphere")):
+            tb.addAction(self._act(label,lambda checked=False,kk=k:self._crea_dialog(kk)))
         tb.addSeparator()
-        tb.addAction(self._act("Box", lambda: self._crea_dialog("box")))
-        tb.addAction(self._act("Cilindro", lambda: self._crea_dialog("cilindro")))
-        tb.addAction(self._act("Sfera", lambda: self._crea_dialog("sfera")))
-        tb.addAction(self._act("Cono", lambda: self._crea_dialog("cono")))
-        tb.addAction(self._act("Toro", lambda: self._crea_dialog("toro")))
-        tb.addAction(self._act("Estrudi", self.act_estrudi_dialog))
-        tb.addAction(self._act("Rivolgi", self.act_rivolgi_dialog))
-        self._tb_geometria = tb
+        for label,action in (
+            ("Move",self.act_trasla_dialog),("Rotate",self.act_ruota_dialog),
+            ("Scale",self.act_scala_dialog),("Mirror",self.act_specchia_dialog),
+            ("Offset",self.act_offset),("Measure",self._measure_selection),
+        ):
+            tb.addAction(self._act(label,action))
+        tb.addSeparator()
+        tb.addAction(self._act("Union",self.act_fusa))
+        tb.addAction(self._act("Difference",self.act_taglio))
+        tb.addAction(self._act("Intersection",self.act_inter))
+        tb.addAction(self._act("Validate",self._geometry_validation))
+        self._tb_geometria=tb
         self.addToolBar(tb)
 
-        # ----- toolbar mesh (modalità mesh)
-        tb2 = QToolBar("Mesh")
+        tb2=QToolBar("Mesh · Setup / Inspection",self)
         tb2.setObjectName("toolbar_mesh")
-        tb2.addAction(self._act("Importa .msh", self.act_importa_msh))
-        tb2.addAction(self._act("OpenSees Export", self.act_export_opensees))
-        tb2.addAction(self._act("Fix", self.act_opensees_fix))
-        tb2.addAction(self._act("Carico", self.act_opensees_load))
-        tb2.addAction(self._act("EqualDOF", self.act_opensees_equaldof))
-        tb2.addAction(self._act("Solutore e Fasi", self.act_opensees_solver_stages))
-        tb2.addAction(self._act("Mesh strutturata", self.act_mesha_structured))
-        tb2.addSeparator()
-        tb2.addAction(self._act("Sel. tutti gli elementi",
-                                lambda: self._mesh_action("all")))
-        tb2.addAction(self._act("Sel. in parallelepipedo…",
-                                lambda: self._mesh_action("box")))
-        tb2.addAction(self._act("Sel. in sfera…",
-                                lambda: self._mesh_action("sfera")))
-        tb2.addAction(self._act("Sel. per gruppo fisico…",
-                                lambda: self._mesh_action("fisico")))
-        tb2.addAction(self._act("Espandi (mesh)",
-                                lambda: self._mesh_action("grow")))
-        tb2.addAction(self._act("Riduci (mesh)",
-                                lambda: self._mesh_action("shrink")))
-        tb2.addAction(self._act("Nodi della selezione",
-                                lambda: self._mesh_action("nodi")))
-        tb2.addAction(self._act("Gruppo mesh dalla selezione…",
-                                self.act_gruppo_mesh))
-        self._tb_mesh = tb2
+        for label,action in (
+            ("Import",self.act_importa_msh),("Generate",self.act_mesha),
+            ("Structured",self.act_mesha_structured),
+            ("All",lambda:self._mesh_action("all")),("Box",lambda:self._mesh_action("box")),
+            ("Sphere",lambda:self._mesh_action("sfera")),("Physical",lambda:self._mesh_action("fisico")),
+            ("Grow",lambda:self._mesh_action("grow")),("Shrink",lambda:self._mesh_action("shrink")),
+            ("Nodes",lambda:self._mesh_action("nodi")),
+            ("Physical Groups",self.act_gruppo_da_selezione),
+            ("OpenSees FEM",self.act_opensees_fem),
+        ):
+            tb2.addAction(self._act(label,action))
+        self._tb_mesh=tb2
         self.addToolBar(tb2)
 
-        tb3 = QToolBar("Principale")
-        tb3.setObjectName("toolbar_principale")
-        tb3.addAction(self._act("Annulla", self.act_undo))
-        tb3.addAction(self._act("Ripeti", self.act_redo))
-        tb3.addSeparator()
-        tb3.addAction(self._act("Elimina", self.act_elimina))
-        tb3.addAction(self._act("Gruppo da selezione", self.act_gruppo_da_selezione))
-        tb3.addSeparator()
-        tb3.addAction(self._act("Fit", self.viewer.fit_all))
-        tb3.addAction(self._act("Iso", lambda: self.viewer.vista("iso")))
-        tb3.addSeparator()
-        # ----- editing col mouse (stile AutoCAD): trascina le entità
-        try:
-            a_drag = QAction("Trascina col mouse", self)
-            a_drag.setCheckable(True)
-            a_drag.setToolTip("Attiva il trascinamento delle entità col "
-                              "mouse sinistro (anteprima + traslazione)")
-            a_drag.toggled.connect(self.act_mouse_edit)
-            tb3.addAction(a_drag)
-            self._act_drag = a_drag
-        except Exception:
-            pass
+        tb3=QToolBar("Interaction",self)
+        tb3.setObjectName("toolbar_interaction")
+        self._act_drag=self._act(
+            "Drag edit",lambda:self.act_mouse_edit(self._act_drag.isChecked()))
+        self._act_drag.setCheckable(True)
+        tb3.addAction(self._act_drag)
+        self._act_snap_toolbar=self._act("Snap",self.act_toggle_snap)
+        self._act_snap_toolbar.setCheckable(True)
+        self._act_snap_toolbar.setChecked(True)
+        tb3.addAction(self._act_snap_toolbar)
+        tb3.addAction(self._act("Grid",self.act_toggle_grid))
+        self._act_trihedron_toolbar = self._act(
+            "Trihedro", self.act_toggle_trihedron)
+        self._act_trihedron_toolbar.setCheckable(True)
+        self._act_trihedron_toolbar.setChecked(
+            bool(getattr(self.viewer, "_trihedron_active", True)))
+        tb3.addAction(self._act_trihedron_toolbar)
         self.addToolBar(tb3)
+        self._tb_interaction=tb3
 
     # ==================================================================== fasi
     def act_nuova_fase(self):
@@ -615,19 +649,49 @@ class MainWindow(QMainWindow):
             self._log(f"Errore bridge fasi: {exc}")
 
     # --- Toggle visualizzazioni OpenSees ---
+    def _set_cad_type_visibility(self, etype, visible):
+        self.visibility_manager.set_cad_type_visible(etype, visible)
+        self._sync_visibility_actions()
+        self._log(f"Visibilità CAD {etype}: {'ON' if visible else 'OFF'}")
+
     def _set_all_cad_visibility(self, visible):
-        for entity in self.doc.entities.values():
-            entity.set_visible(visible)
-        self.viewer.redraw_all(fit=False)
+        self.visibility_manager.set_all_cad_visible(visible)
         self.tree_panel.refresh()
         self._log(f"Visibilità CAD: {'ON' if visible else 'OFF'}")
 
     def _invert_cad_visibility(self):
-        for entity in self.doc.entities.values():
-            entity.set_visible(not entity.visible)
-        self.viewer.redraw_all(fit=False)
+        self.visibility_manager.invert_cad_visibility()
         self.tree_panel.refresh()
         self._log("Visibilità CAD: invertita")
+
+    def act_toggle_mesh_visibility(self):
+        on = not self.visibility_manager.is_mesh_visible()
+        self.visibility_manager.set_mesh_visible(on)
+        self._sync_visibility_actions()
+        self._log(f"Visibilità blocchi mesh: {'ON' if on else 'OFF'}")
+
+    def act_toggle_trihedron(self):
+        if hasattr(self.viewer, "toggle_trihedron"):
+            on = self.viewer.toggle_trihedron()
+            for action_name in ("_act_trihedron", "_act_trihedron_toolbar"):
+                action = getattr(self, action_name, None)
+                if action is not None:
+                    action.blockSignals(True)
+                    action.setChecked(on)
+                    action.blockSignals(False)
+            self._log(f"Trihedro: {'ON' if on else 'OFF'}")
+
+    def _sync_visibility_actions(self):
+        for etype, action in getattr(self, "_cad_visibility_actions", {}).items():
+            action.blockSignals(True)
+            action.setChecked(self.visibility_manager.is_cad_type_visible(etype))
+            action.blockSignals(False)
+        action = getattr(self, "_act_mesh_visible", None)
+        if action is not None:
+            action.blockSignals(True)
+            action.setChecked(self.visibility_manager.is_mesh_visible())
+            action.blockSignals(False)
+
 
     def act_toggle_node_labels(self):
         if hasattr(self.viewer, "toggle_node_labels"):
@@ -661,9 +725,8 @@ class MainWindow(QMainWindow):
         if hasattr(self.viewer, "set_snap_enabled"):
             new_state = not getattr(self.viewer, "_snap_enabled", True)
             self.viewer.set_snap_enabled(new_state)
+            self._sync_visual_preferences()
             self._log(f"Snapping: {'ON' if new_state else 'OFF'}")
-            if hasattr(self, "_act_snap"):
-                self._act_snap.setChecked(new_state)
 
     def act_set_snap_step(self):
         from PySide6.QtWidgets import QInputDialog, QMessageBox
@@ -788,6 +851,467 @@ class MainWindow(QMainWindow):
                       if on else "Editing mouse disattivato")
 
     # ==================================================================== utility
+    # ========================================================= command line / UX
+    def _setup_command_registry(self):
+        specs = [
+            CommandSpec("HELP", lambda a: self._command_help_text(),
+                        "Elenco comandi", "HELP"),
+            CommandSpec("CANCEL", lambda a: "Annullato",
+                        "Annulla", "CANCEL"),
+            CommandSpec("UNDO", lambda a: self.act_undo(), "Undo", "UNDO"),
+            CommandSpec("REDO", lambda a: self.act_redo(), "Redo", "REDO"),
+            CommandSpec("POINT", self._cmd_point, "Crea punto",
+                        "POINT x y z", aliases=("P",)),
+            CommandSpec("LINE", self._cmd_line, "Crea linea",
+                        "LINE x1 y1 z1 x2 y2 z2", aliases=("L",)),
+            CommandSpec("CIRCLE", self._cmd_circle, "Crea cerchio",
+                        "CIRCLE cx cy cz r [nx ny nz]"),
+            CommandSpec("BOX", self._cmd_box, "Crea box",
+                        "BOX dx dy dz [bx by bz]"),
+            CommandSpec("SPHERE", self._cmd_sphere, "Crea sfera",
+                        "SPHERE r [cx cy cz]"),
+            CommandSpec("ARC", self._cmd_arc, "Crea arco",
+                        "ARC x1 y1 z1 xm ym zm x2 y2 z2"),
+            CommandSpec("POLYLINE", self._cmd_polyline, "Crea polilinea",
+                        "POLYLINE x1 y1 z1 x2 y2 z2 ..."),
+            CommandSpec("RECTANGLE", self._cmd_rectangle, "Crea rettangolo",
+                        "RECTANGLE cx cy width height [z]"),
+            CommandSpec("CYLINDER", self._cmd_cylinder, "Crea cilindro",
+                        "CYLINDER r h [bx by bz] [ax ay az]"),
+            CommandSpec("CONE", self._cmd_cone, "Crea cono",
+                        "CONE r1 r2 h [bx by bz] [ax ay az]"),
+            CommandSpec("TORUS", self._cmd_torus, "Crea toro",
+                        "TORUS rmajor rminor"),
+            CommandSpec("EXTRUDE", self._cmd_extrude, "Estrudi un profilo",
+                        "EXTRUDE profile_id dx dy dz"),
+            CommandSpec("REVOLVE", self._cmd_revolve, "Rivoluzione di un profilo",
+                        "REVOLVE profile_id px py pz ax ay az angle"),
+            CommandSpec("MOVE", self._cmd_move, "Muove la selezione",
+                        "MOVE dx dy dz", aliases=("M",)),
+            CommandSpec("ROTATE", self._cmd_rotate, "Ruota la selezione",
+                        "ROTATE px py pz ax ay az angle", aliases=("R",)),
+            CommandSpec("SCALE", self._cmd_scale, "Scala la selezione",
+                        "SCALE factor", aliases=("S",)),
+            CommandSpec("DELETE", lambda a: self.act_elimina(),
+                        "Elimina", "DELETE", aliases=("DEL",)),
+            CommandSpec("COPY", lambda a: self.act_duplica(), "Duplica", "COPY"),
+            CommandSpec("SELECT", self._cmd_select, "Selezione",
+                        "SELECT ALL|NONE|VISIBLE|TYPE <type>"),
+            CommandSpec("WORKSPACE", self._cmd_workspace, "Workspace",
+                        "WORKSPACE CAD|MESH", aliases=("WS",)),
+            CommandSpec("VIEW", self._cmd_view, "Vista",
+                        "VIEW ISO|FRONT|TOP|RIGHT|LEFT|BOTTOM|BACK"),
+            CommandSpec("ZOOM", self._cmd_zoom, "Zoom",
+                        "ZOOM EXTENTS|SELECTION"),
+            CommandSpec("GRID", self._cmd_grid, "Griglia", "GRID ON|OFF"),
+            CommandSpec("SNAP", self._cmd_snap, "Snap", "SNAP ON|OFF"),
+            CommandSpec("WIRE", self._cmd_wire, "Display", "WIRE ON|OFF"),
+            CommandSpec("FIT", lambda a: self.viewer.fit_all(), "Fit", "FIT"),
+            CommandSpec("MESH", self._cmd_mesh, "Mesh",
+                        "MESH IMPORT path|MESH GENERATE"),
+            CommandSpec("GROUP", self._cmd_group, "Gruppo",
+                        "GROUP CREATE name"),
+            CommandSpec("MACRO", self._cmd_macro, "Macro", "MACRO name"),
+            CommandSpec("SAVE", self._cmd_save, "Export",
+                        "SAVE STEP|BREP|MSH TO path"),
+            CommandSpec("VALIDATE", lambda a: self.act_validate_opensees_model(),
+                        "Validazione OpenSees", "VALIDATE"),
+        ]
+        self.command_line.set_commands(specs)
+
+    def _command_help_text(self):
+        seen=set(); lines=[]
+        for spec in sorted(self.command_line.commands.values(),key=lambda x:x.name):
+            if spec.name in seen: continue
+            seen.add(spec.name)
+            lines.append(f"{spec.name:10s} {spec.usage:42s} {spec.description}")
+        self._log("\n".join(lines))
+        return "HELP scritto nel log"
+
+    def _on_command_finished(self,raw,ok,message):
+        self._log(f"[CMD {'OK' if ok else 'ERR'}] {raw}"
+                  + (f" → {message}" if message else ""))
+
+    def _focus_command_line(self):
+        self._command_dock.show()
+        self._command_dock.raise_()
+        self.command_line.focus_input()
+
+    @staticmethod
+    def _floats(args,n,usage):
+        if len(args)!=n:
+            raise ValueError(f"Uso: {usage}")
+        try:
+            return [float(str(x).strip("\"'")) for x in args]
+        except ValueError as exc:
+            raise ValueError(
+                f"Parametri numerici non validi. Uso: {usage}") from exc
+
+    def _cmd_point(self,args):
+        x,y,z=self._floats(args,3,"POINT x y z")
+        e=self.builder.punto(x,y,z)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Punto {e.id}"
+
+    def _cmd_line(self,args):
+        v=self._floats(args,6,"LINE x1 y1 z1 x2 y2 z2")
+        e=self.builder.linea(v[:3],v[3:6])
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creata Linea {e.id}"
+
+    def _cmd_circle(self,args):
+        if len(args) not in (4,7):
+            raise ValueError("Uso: CIRCLE cx cy cz r [nx ny nz]")
+        v=self._floats(args,len(args),"CIRCLE cx cy cz r [nx ny nz]")
+        n=tuple(v[4:7]) if len(v)==7 else (0.0,0.0,1.0)
+        e=self.builder.cerchio(*v[:4],normal=n)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Cerchio {e.id}"
+
+    def _cmd_box(self,args):
+        if len(args) not in (3,6):
+            raise ValueError("Uso: BOX dx dy dz [bx by bz]")
+        v=self._floats(args,len(args),"BOX dx dy dz [bx by bz]")
+        base=tuple(v[3:6]) if len(v)==6 else (0.0,0.0,0.0)
+        e=self.builder.box(*v[:3],base=base)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Box {e.id}"
+
+    def _cmd_sphere(self,args):
+        if len(args) not in (1,4):
+            raise ValueError("Uso: SPHERE r [cx cy cz]")
+        v=self._floats(args,len(args),"SPHERE r [cx cy cz]")
+        center=tuple(v[1:4]) if len(v)==4 else (0.0,0.0,0.0)
+        e=self.builder.sfera(v[0],center=center)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creata Sfera {e.id}"
+
+    def _cmd_arc(self,args):
+        v=self._floats(args,9,"ARC x1 y1 z1 xm ym zm x2 y2 z2")
+        e=self.builder.arco(v[:3],v[3:6],v[6:9])
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Arco {e.id}"
+
+    def _cmd_polyline(self,args):
+        if len(args)<6 or len(args)%3:
+            raise ValueError("Uso: POLYLINE x1 y1 z1 x2 y2 z2 ...")
+        v=self._floats(args,len(args),"POLYLINE x1 y1 z1 x2 y2 z2 ...")
+        pts=[v[i:i+3] for i in range(0,len(v),3)]
+        created=self.builder.polilinea(pts)
+        self.selection_manager.set_selection([e.id for e in created],context="cad")
+        return f"Create {len(created)} segmenti di polilinea"
+
+    def _cmd_rectangle(self,args):
+        if len(args) not in (4,5):
+            raise ValueError("Uso: RECTANGLE cx cy width height [z]")
+        v=self._floats(args,len(args),"RECTANGLE cx cy width height [z]")
+        z=v[4] if len(v)==5 else 0.0
+        e=self.builder.rettangolo(v[0],v[1],v[2],v[3],z=z)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Rettangolo {e.id}"
+
+    def _cmd_cylinder(self,args):
+        if len(args) not in (2,5,8):
+            raise ValueError("Uso: CYLINDER r h [bx by bz] [ax ay az]")
+        v=self._floats(args,len(args),"CYLINDER r h [bx by bz] [ax ay az]")
+        base=tuple(v[2:5]) if len(v)>=5 else (0.0,0.0,0.0)
+        axis=tuple(v[5:8]) if len(v)==8 else (0.0,0.0,1.0)
+        e=self.builder.cilindro(v[0],v[1],base=base,axis=axis)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Cilindro {e.id}"
+
+    def _cmd_cone(self,args):
+        if len(args) not in (3,6,9):
+            raise ValueError("Uso: CONE r1 r2 h [bx by bz] [ax ay az]")
+        v=self._floats(args,len(args),"CONE r1 r2 h [bx by bz] [ax ay az]")
+        base=tuple(v[3:6]) if len(v)>=6 else (0.0,0.0,0.0)
+        axis=tuple(v[6:9]) if len(v)==9 else (0.0,0.0,1.0)
+        e=self.builder.cono(v[0],v[1],v[2],base=base,axis=axis)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Cono {e.id}"
+
+    def _cmd_torus(self,args):
+        v=self._floats(args,2,"TORUS rmajor rminor")
+        e=self.builder.toro(v[0],v[1])
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creato Toro {e.id}"
+
+    def _cmd_extrude(self,args):
+        if len(args)!=4:
+            raise ValueError("Uso: EXTRUDE profile_id dx dy dz")
+        try:
+            profile_id=int(float(args[0]))
+        except ValueError as exc:
+            raise ValueError("profile_id deve essere un intero") from exc
+        v=self._floats(args[1:],3,"EXTRUDE profile_id dx dy dz")
+        e=self.builder.estrudi(profile_id,*v)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creata Estrusione {e.id}"
+
+    def _cmd_revolve(self,args):
+        if len(args)!=8:
+            raise ValueError("Uso: REVOLVE profile_id px py pz ax ay az angle")
+        try:
+            profile_id=int(float(args[0]))
+        except ValueError as exc:
+            raise ValueError("profile_id deve essere un intero") from exc
+        v=self._floats(args[1:],7,
+                       "REVOLVE profile_id px py pz ax ay az angle")
+        e=self.builder.rivolgi(profile_id,*v)
+        self.selection_manager.set_selection([e.id],context="cad")
+        return f"Creata Rivoluzione {e.id}"
+
+    def _cmd_move(self,args):
+        v=self._floats(args,3,"MOVE dx dy dz")
+        ids=sorted(self.doc.selection)
+        if not ids:
+            raise ValueError("MOVE richiede una selezione")
+        self.editor.trasla(ids,*v)
+        return f"Traslate {len(ids)} entità"
+
+    def _cmd_rotate(self,args):
+        v=self._floats(args,7,"ROTATE px py pz ax ay az angle")
+        ids=sorted(self.doc.selection)
+        if not ids:
+            raise ValueError("ROTATE richiede una selezione")
+        self.editor.ruota(ids,*v)
+        return f"Ruotate {len(ids)} entità"
+
+    def _cmd_scale(self,args):
+        v=self._floats(args,1,"SCALE factor")
+        if not self.doc.selection:
+            raise ValueError("SCALE richiede una selezione")
+        self.editor.scala(self.doc.selection,v[0])
+        return f"Scalate {len(self.doc.selection)} entità"
+
+    def _cmd_select(self,args):
+        if not args:
+            raise ValueError("Uso: SELECT ALL|NONE|VISIBLE|TYPE <type>")
+        h=args[0].upper()
+        if h=="ALL": sel.select_all(self.doc)
+        elif h in ("NONE","CLEAR"): sel.select_none(self.doc)
+        elif h=="VISIBLE":
+            self.selection_manager.set_selection(
+                [e.id for e in self.doc.entities.values() if e.visible],
+                context="cad")
+        elif h=="TYPE" and len(args)==2:
+            sel.select_by_type(self.doc,args[1].lower())
+        else:
+            raise ValueError("Uso: SELECT ALL|NONE|VISIBLE|TYPE <type>")
+        return f"Selezionate {len(self.doc.selection)} entità"
+
+    def _cmd_workspace(self,args):
+        if len(args)!=1 or args[0].upper() not in ("CAD","MESH"):
+            raise ValueError("Uso: WORKSPACE CAD|MESH")
+        self._set_mode("mesh" if args[0].upper()=="MESH" else "geometria")
+        return f"Workspace: {args[0].upper()}"
+
+    def _cmd_view(self,args):
+        if len(args)!=1:
+            raise ValueError("Uso: VIEW ISO|FRONT|TOP|RIGHT|LEFT|BOTTOM|BACK")
+        v=args[0].lower()
+        if v not in ("iso","front","top","right","left","bottom","back"):
+            raise ValueError("Vista non riconosciuta")
+        self.viewer.vista(v)
+        return f"Vista {v}"
+
+    def _cmd_zoom(self,args):
+        if len(args)!=1 or args[0].upper() not in ("EXTENTS","SELECTION"):
+            raise ValueError("Uso: ZOOM EXTENTS|SELECTION")
+        result=self.viewer.fit_all() if args[0].upper()=="EXTENTS" else self._fit_selection()
+        if result is False: raise ValueError("Nessuna selezione")
+        return "Zoom eseguito"
+
+    def _cmd_grid(self,args):
+        if len(args)!=1 or args[0].upper() not in ("ON","OFF"):
+            raise ValueError("Uso: GRID ON|OFF")
+        self.viewer.set_grid_active(args[0].upper()=="ON")
+        self._sync_visual_preferences()
+        return f"Grid {args[0].upper()}"
+
+    def _cmd_snap(self,args):
+        if len(args)!=1 or args[0].upper() not in ("ON","OFF"):
+            raise ValueError("Uso: SNAP ON|OFF")
+        self.viewer.set_snap_enabled(args[0].upper()=="ON")
+        self._sync_visual_preferences()
+        return f"Snap {args[0].upper()}"
+
+    def _cmd_wire(self,args):
+        if len(args)!=1 or args[0].upper() not in ("ON","OFF"):
+            raise ValueError("Uso: WIRE ON|OFF")
+        self.viewer.set_wireframe(args[0].upper()=="ON")
+        return f"Wireframe {args[0].upper()}"
+
+    def _cmd_mesh(self,args):
+        if len(args)==2 and args[0].upper()=="IMPORT":
+            model=self.doc.import_msh(args[1].strip("\"'"))
+            self._set_mode("mesh")
+            return f"Mesh importata: {model.name}"
+        if len(args)==1 and args[0].upper()=="GENERATE":
+            self.act_mesha()
+            return "Dialog generazione mesh aperto"
+        raise ValueError("Uso: MESH IMPORT path | MESH GENERATE")
+
+    def _cmd_group(self,args):
+        if len(args)>=2 and args[0].upper()=="CREATE":
+            name=" ".join(args[1:]).strip("\"'")
+            if not name: raise ValueError("Nome gruppo vuoto")
+            self.doc.groups.group_from_selection(self.doc,name)
+            return f"Gruppo '{name}' creato"
+        raise ValueError("Uso: GROUP CREATE name")
+
+    def _cmd_macro(self,args):
+        if not args: raise ValueError("Uso: MACRO name")
+        name=" ".join(args).strip("\"'")
+        spec=self.engine.by_name(name)
+        if spec is None: raise ValueError(f"Macro non trovata: {name}")
+        self.run_macro(spec)
+        return f"Macro '{spec.name}' avviata"
+
+    def _cmd_save(self,args):
+        if len(args)!=3 or args[1].upper()!="TO":
+            raise ValueError("Uso: SAVE STEP|BREP|MSH TO path")
+        kind=args[0].upper()
+        path=args[2].strip("\"'")
+        if kind=="STEP":
+            self.doc.export_step(path)
+        elif kind=="BREP":
+            self.doc.export_brep(path)
+        elif kind=="MSH":
+            model=next(iter(self.doc.mesh_models.values()),None)
+            if model is None: raise ValueError("Nessuna mesh")
+            if model.stale: raise ValueError(f"Mesh '{model.name}' è STALE")
+            gb.export_msh_22(model,path)
+        else:
+            raise ValueError("Formato non supportato")
+        return f"Esportato {kind}: {path}"
+
+    def _on_selection_filter_changed(self,text):
+        mapping={"All":"all","Points":"point","Curves":"curve",
+                 "Surfaces":"face","Solids":"solid"}
+        if hasattr(self.viewer,"set_selection_filter"):
+            self.viewer.set_selection_filter(mapping.get(text,"all"))
+        self._update_status()
+
+    def _sync_visual_preferences(self):
+        for name,value in (
+            ("_act_settings_snap",getattr(self.viewer,"_snap_enabled",True)),
+            ("_act_settings_grid",getattr(self.viewer,"_grid_active",True)),
+        ):
+            action=getattr(self,name,None)
+            if action is not None:
+                action.blockSignals(True)
+                action.setChecked(bool(value))
+                action.blockSignals(False)
+        if hasattr(self,"_act_snap_toolbar"):
+            self._act_snap_toolbar.setChecked(
+                bool(getattr(self.viewer,"_snap_enabled",True)))
+        if hasattr(self,"_act_grid"):
+            self._act_grid.setChecked(
+                bool(getattr(self.viewer,"_grid_active",True)))
+
+    def _fit_selection(self):
+        fn=getattr(self.viewer,"fit_selection",None)
+        return bool(fn and fn())
+
+    def _measure_selection(self):
+        entities=self.doc.selected_entities()
+        if not entities:
+            self._log("Seleziona un'entità da misurare"); return
+        lines=[]
+        for e in entities:
+            if e.shape is None: continue
+            try:
+                if e.etype=="curve": lines.append(f"{e.name}: Length={ou.length_of(e.shape):.6g}")
+                elif e.etype=="face": lines.append(f"{e.name}: Area={ou.area_of(e.shape):.6g}")
+                elif e.etype=="solid": lines.append(f"{e.name}: Volume={ou.volume_of(e.shape):.6g}")
+                else: lines.append(f"{e.name}: Point")
+            except Exception as exc:
+                lines.append(f"{e.name}: misura non disponibile ({exc})")
+        self._log("\n".join(lines) if lines else "Misura non disponibile")
+
+    def _geometry_validation(self):
+        entities=[e for e in self.doc.selected_entities() if e.shape is not None]
+        if not entities:
+            self._log("Nessuna geometria selezionata da validare"); return
+        try:
+            from OCC.Core.BRepCheck import BRepCheck_Analyzer
+        except ImportError:
+            self._log("Validator OCC non disponibile"); return
+        invalid=[]
+        for e in entities:
+            try:
+                if not BRepCheck_Analyzer(e.shape).IsValid(): invalid.append(e.name)
+            except Exception:
+                invalid.append(e.name)
+        self._log("Geometria valida" if not invalid else
+                  "Geometrie non valide: "+", ".join(invalid))
+
+    def _export_brep_command(self):
+        path,_=QFileDialog.getSaveFileName(self,"Esporta BREP","","BREP (*.brep)")
+        if path:
+            try:
+                self.doc.export_brep(path)
+                self._log(f"Esportato BREP: {path}")
+            except Exception as exc:
+                self._errore("Export BREP",exc)
+
+    def _show_command_help(self):
+        self._focus_command_line()
+        self._command_help_text()
+
+    def _save_ui_state(self):
+        s=QSettings("GmshCad-SOB","GmshCAD Studio")
+        s.setValue("geometry",self.saveGeometry())
+        s.setValue("windowState",self.saveState())
+        s.setValue("workspace",self.doc.mode)
+        s.setValue("snap_enabled",bool(getattr(self.viewer,"_snap_enabled",True)))
+        s.setValue("snap_step",float(getattr(self.viewer,"_snap_grid_step",1.0)))
+        s.setValue("grid_enabled",bool(getattr(self.viewer,"_grid_active",True)))
+        s.setValue("selection_filter",getattr(self.viewer,"selection_filter","all"))
+
+    def _restore_ui_state(self):
+        s=QSettings("GmshCad-SOB","GmshCAD Studio")
+        g=s.value("geometry"); st=s.value("windowState")
+        if g:
+            try:self.restoreGeometry(g)
+            except Exception:pass
+        if st:
+            try:self.restoreState(st)
+            except Exception:pass
+        self._set_mode(
+            "mesh" if str(s.value("workspace","geometria")).lower()=="mesh"
+            else "geometria")
+        if s.contains("snap_enabled"):
+            self.viewer.set_snap_enabled(
+                str(s.value("snap_enabled")).lower()=="true")
+        if s.contains("snap_step"):
+            try:self.viewer.set_snap_grid_step(float(s.value("snap_step")))
+            except Exception:pass
+        if s.contains("grid_enabled"):
+            self.viewer.set_grid_active(
+                str(s.value("grid_enabled")).lower()=="true")
+        filt=s.value("selection_filter")
+        if filt:
+            mapping={"all":"All","point":"Points","curve":"Curves",
+                     "face":"Surfaces","solid":"Solids"}
+            self._selection_filter_combo.setCurrentText(
+                mapping.get(str(filt),"All"))
+        self._sync_visual_preferences()
+
+    def _reset_ui_layout(self):
+        for d in (self._dock_tree,self._dock_flow,self._dock_props,
+                  self._dock_command,self._dock_console):
+            d.show()
+            d.setFloating(False)
+        self.resize(1500,950)
+        self._set_mode("geometria")
+        self._log("Layout UI ripristinato")
+
+    def closeEvent(self,event):  # noqa: N802
+        self._save_ui_state()
+        event.accept()
+
     def _act(self, testo, slot, shortcut=None) -> QAction:
         a = QAction(testo, self)
         a.triggered.connect(slot)
@@ -819,6 +1343,20 @@ class MainWindow(QMainWindow):
             if self.viewer is not None:
                 self.viewer.highlight_selection()
             self._update_status()
+        elif event == "visibility_changed":
+            self.tree_panel.refresh()
+            self._sync_visibility_actions()
+            self._update_status()
+        elif event == "mesh_stale":
+            self.tree_panel.refresh()
+            models = ", ".join(data.get("models", [])) if isinstance(data, dict) else ""
+            if self.viewer is not None:
+                self.viewer.redraw_all(fit=False)
+            self._log(
+                "ATTENZIONE: la mesh non è più coerente con la geometria"
+                + (f" ({models})" if models else "")
+                + ". La mesh stale è nascosta; rigenerare/reimportare prima dell'analisi/export.")
+            self._update_status()
 
     # ----- handler per il drag del mouse (editing interattivo stile AutoCAD)
     def _on_entity_dragged(self, eid, dx, dy, dz):
@@ -846,13 +1384,20 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_selection_picked(self, ids):
-        """Selezione pickata dal viewer: aggiorna il documento."""
+        """Aggiorna la selezione logica dal pick CAD."""
         if not isinstance(ids, (list, tuple, set)):
             return
         try:
-            self.doc.set_selection(set(ids))
+            values = {int(i) for i in ids}
+            self.selection_manager.set_context("cad")
+            if values != set(self.doc.selection):
+                self.selection_manager.set_selection(values)
         except Exception:
             pass
+
+    def _on_hover_info(self, text):
+        if hasattr(self, "_status_left"):
+            self._status_left.setText(str(text) if text else "Pronto")
 
     def _refresh_all(self):
         self.tree_panel.refresh()
@@ -865,13 +1410,21 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         enti = len(self.doc.selected_entities())
+        filt = getattr(self.viewer, "selection_filter", "all")
         mesh_info = ""
+        stale = []
         for m in self.doc.mesh_models.values():
-            mesh_info += (f" | {m.name}: {len(m.sel_nodes)} nodi, "
-                          f"{len(m.sel_elements)} elem. sel.")
+            mesh_info += (
+                f" | {m.name}: {len(m.sel_nodes)} nodi, "
+                f"{len(m.sel_elements)} elem.")
+            if m.stale:
+                stale.append(m.name)
+        stale_text = f" | MESH STALE: {', '.join(stale)}" if stale else ""
+        context = getattr(self.selection_manager, "context", "cad")
         self._status_right.setText(
-            f"Modalità: {'Geometria' if self.doc.mode == 'geometria' else 'Mesh'} | "
-            f"{enti} entità selezionate{mesh_info}")
+            f"Workspace: {'CAD' if self.doc.mode == 'geometria' else 'Mesh'} | "
+            f"Selection: {context.upper()} | Filtro: {filt} | "
+            f"{enti} entità selezionate{mesh_info}{stale_text}")
 
     def _console_namespace(self):
         import gcs.core.selectors as sel_mod
@@ -917,11 +1470,20 @@ class MainWindow(QMainWindow):
             self._log("Workflow OpenSees: pannello Fasi / Tcl attivo.")
 
     def _set_mode(self, modo):
+        modo = "mesh" if str(modo).lower() == "mesh" else "geometria"
         self.doc.mode = modo
-        self._tb_geometria.setVisible(modo == "geometria")
-        self._tb_mesh.setVisible(modo == "mesh")
-        self._mgeo.setChecked(modo == "geometria")
-        self._mmesh.setChecked(modo == "mesh")
+        if hasattr(self, "selection_manager"):
+            self.selection_manager.set_context(
+                "mesh" if modo == "mesh" else "cad")
+        if hasattr(self, "_tb_geometria"):
+            self._tb_geometria.setVisible(modo == "geometria")
+        if hasattr(self, "_tb_mesh"):
+            self._tb_mesh.setVisible(modo == "mesh")
+        if hasattr(self, "_workspace_combo"):
+            blocker = self._workspace_combo.blockSignals(True)
+            self._workspace_combo.setCurrentText(
+                "Mesh" if modo == "mesh" else "CAD")
+            self._workspace_combo.blockSignals(blocker)
         if hasattr(self, "_status_right"):
             self._update_status()
 
@@ -1148,6 +1710,12 @@ class MainWindow(QMainWindow):
                                 "Importa o genera prima una mesh (File > Mesha o Importa mesh).")
             return
         active_model = list(self.doc.mesh_models.values())[-1]
+        if active_model.stale:
+            QMessageBox.warning(
+                self, "Mesh non aggiornata",
+                f"La mesh '{active_model.name}' non corrisponde più alla geometria corrente.\n\n"
+                "Rigenera/reimporta la mesh prima dell'export OpenSees.")
+            return
         assignments = [item for item in self.doc.opensees.element_assignments
                        if item.model_name == active_model.name]
         if not assignments:
@@ -1342,6 +1910,8 @@ class MainWindow(QMainWindow):
         """Attiva o disattiva la griglia quadrettata 3D nel viewer."""
         if hasattr(self.viewer, "toggle_grid"):
             active = self.viewer.toggle_grid()
+            if hasattr(self, "_act_grid"):
+                self._act_grid.setChecked(active)
             stato = "attivata" if active else "disattivata"
             self._log(f"Griglia 3D quadrettata {stato}")
 

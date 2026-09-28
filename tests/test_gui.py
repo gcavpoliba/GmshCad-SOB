@@ -51,6 +51,54 @@ def test_main_window_construisce(app):
     win.close()
 
 
+def test_cad_selection_viewer_to_tree(app):
+    from gcs.gui.main_window import MainWindow
+    from gcs.core import occ_utils as occ
+
+    win = MainWindow()
+    box = win.builder.box(10, 10, 10)
+    faces = occ.unique_subshapes(box.shape, occ.TopAbs_FACE)
+    assert faces
+
+    face_id = win.viewer._resolve_shape_owner(faces[0])
+    assert face_id is not None
+    face = win.doc.entities[int(face_id)]
+    assert face.etype == "face"
+    assert int(face.meta["parent"]) == box.id
+
+    win.selection_manager.set_selection([face_id], context="cad")
+    item = win.tree_panel._entity_items[int(face_id)]
+    assert item.isSelected()
+    assert win.doc.selection == {int(face_id)}
+
+    win.tree_panel._select(face_id)
+    assert win.doc.selection == {int(face_id)}
+    win.close()
+
+
+def test_command_line_uses_real_geometry_backend(app):
+    from gcs.gui.main_window import MainWindow
+
+    win = MainWindow()
+    assert win.command_line is not None
+    assert "POINT" in win.command_line.commands
+    assert "MOVE" in win.command_line.commands
+
+    ok = win.command_line.execute("POINT 1 2 3")
+    assert ok is True
+    points = [e for e in win.doc.entities.values() if e.etype == "point"]
+    assert points
+    assert win.doc.selection == {points[-1].id}
+
+    from PySide6.QtWidgets import QMenu
+    titles = [menu.title() for menu in win.menuBar().findChildren(QMenu)]
+    # La verifica principale è sui menu di primo livello richiesti dal redesign.
+    assert any("File" in title for title in titles)
+    assert any("Geometry" in title for title in titles)
+    assert any("Mesh" in title for title in titles)
+    win.close()
+
+
 def test_paramdialog_campi(app):
     from gcs.gui.dialogs import ParamDialog
     from gcs.core.macro_engine import MacroSpec, P

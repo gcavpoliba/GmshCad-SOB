@@ -6,6 +6,8 @@ from gcs.core.document import CADDocument
 from gcs.core.entities import Entity, normalize_type
 from gcs.core.groups import GroupError
 from gcs.core import selectors as sel
+from gcs.core.selection_manager import SelectionManager
+from gcs.core.visibility_manager import VisibilityManager
 
 
 @pytest.fixture
@@ -94,6 +96,76 @@ def test_query_fluente(doc):
     # in_sphere usa il centro dei blocchi mesh fittizi (da mesh_ref inesistente
     # qui: il modello 'm' non esiste -> centro None -> nessuna selezione)
     assert doc.query().type("solid").ids() == set(doc.query().type("solid").ids())
+
+
+def test_selection_manager_unificato(doc):
+    manager = SelectionManager(doc)
+    manager.select(6, context="cad")
+    assert manager.selected_entity_ids() == {6}
+    manager.add_to_selection([7])
+    assert manager.selected_entity_ids() == {6, 7}
+    manager.remove_from_selection([6])
+    assert manager.selected_entity_ids() == {7}
+    manager.clear_selection()
+    assert doc.selection == set()
+    assert manager.context == "cad"
+
+
+def test_visibility_manager_separa_cad_da_mesh(doc):
+    manager = VisibilityManager(doc)
+    face_id = 6
+    mesh_id = 1
+
+    manager.set_cad_type_visible("face", False)
+    assert not manager.is_entity_visible(doc.entities[face_id])
+    assert manager.is_entity_visible(doc.entities[mesh_id])
+
+    manager.set_mesh_visible(False)
+    assert not manager.is_entity_visible(doc.entities[mesh_id])
+    manager.set_cad_type_visible("face", True)
+    assert manager.is_entity_visible(doc.entities[face_id])
+
+
+def test_mesh_stale_after_geometry_change():
+    from gcs.core.document import CADDocument
+    from gcs.core.entities import Entity
+    from gcs.core.mesh import MeshModel
+
+    doc = CADDocument("stale")
+    geom = Entity("solid", shape=object(), name="Solido")
+    doc.add_entity(geom, push_undo=False)
+
+    model = MeshModel("mesh")
+    model.mark_current(doc.geometry_revision)
+    doc.mesh_models[model.name] = model
+
+    doc.replace_entity_shape(geom, object(), push_undo=False)
+    assert model.stale is True
+    assert model.stale_reason == "modifica geometria"
+    assert doc.mesh_status()["mesh"]["stale"] is True
+
+
+def test_stale_mesh_is_not_visible(doc):
+    from gcs.core.mesh import MeshModel
+    from gcs.core.visibility_manager import VisibilityManager
+    from gcs.core.entities import Entity
+
+    geom = Entity("solid", shape=object(), name="geom")
+    doc.add_entity(geom, push_undo=False)
+    model = MeshModel("mesh")
+    model.mark_current(doc.geometry_revision)
+    doc.mesh_models["mesh"] = model
+
+    block = Entity("face", shape=None, name="mesh block")
+    block.meta["mesh_ref"] = ("mesh", 2, 1)
+    doc.add_entity(block, push_undo=False)
+
+    manager = VisibilityManager(doc)
+    assert manager.is_entity_visible(block)
+
+    doc.replace_entity_shape(geom, object(), push_undo=False)
+    assert model.stale
+    assert not manager.is_entity_visible(block)
 
 
 def test_documento_mesh_entities(doc):

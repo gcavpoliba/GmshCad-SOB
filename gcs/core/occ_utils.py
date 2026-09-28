@@ -66,9 +66,16 @@ try:  # pythonocc-core (conda-forge)
 
     try:
         from OCC.Core.BRepGProp import BRepGProp
-        _vol_props = BRepGProp.VolumeProperties_s
-        _surf_props = BRepGProp.SurfaceProperties_s
-        _lin_props = BRepGProp.LinearProperties_s
+        # pythonocc 7.7+ espone i metodi statici senza suffisso _s; alcune
+        # release precedenti usano invece il suffisso generato dal binding.
+        _vol_props = (getattr(BRepGProp, "VolumeProperties", None)
+                      or getattr(BRepGProp, "VolumeProperties_s", None))
+        _surf_props = (getattr(BRepGProp, "SurfaceProperties", None)
+                       or getattr(BRepGProp, "SurfaceProperties_s", None))
+        _lin_props = (getattr(BRepGProp, "LinearProperties", None)
+                      or getattr(BRepGProp, "LinearProperties_s", None))
+        if not all((_vol_props, _surf_props, _lin_props)):
+            raise AttributeError("Metodi statici BRepGProp non disponibili")
     except Exception:
         from OCC.Core.BRepGProp import (brepgprop_VolumeProperties as _vol_props,  # type: ignore
                                         brepgprop_SurfaceProperties as _surf_props,  # type: ignore
@@ -76,7 +83,10 @@ try:  # pythonocc-core (conda-forge)
 
     try:
         from OCC.Core.BRepBndLib import BRepBndLib
-        _bnd_add = BRepBndLib.Add_s
+        _bnd_add = (getattr(BRepBndLib, "Add", None)
+                    or getattr(BRepBndLib, "Add_s", None))
+        if not _bnd_add:
+            raise AttributeError("Metodo statico BRepBndLib.Add non disponibile")
     except Exception:
         from OCC.Core.BRepBndLib import brepbndlib_Add as _bnd_add  # type: ignore
 

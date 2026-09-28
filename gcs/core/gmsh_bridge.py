@@ -16,6 +16,9 @@ richiedono segnalano l'errore con messaggio chiaro).
 from __future__ import annotations
 
 import os
+import json
+import subprocess
+import sys
 from typing import Dict, List, Optional, Tuple
 
 from .mesh import MeshModel, MeshBlock, corner_nodes
@@ -53,7 +56,7 @@ def _require_gmsh():
 # meshing embedded
 # ---------------------------------------------------------------------------
 
-def mesh_step(step_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
+def _mesh_step_inprocess(step_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
               order: int = 1, algo3d: str = "HXT", msh_version: str = "4.1",
               save_physicals: bool = True) -> dict:
     """Genera la mesh di un file STEP e salva un .msh. Ritorna statistiche."""
@@ -75,7 +78,7 @@ def mesh_step(step_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0
         gmsh.finalize()
 
 
-def mesh_brep(brep_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
+def _mesh_brep_inprocess(brep_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
               order: int = 1, algo3d: str = "HXT",
               msh_version: str = "4.1") -> dict:
     gmsh = _require_gmsh()
@@ -115,6 +118,110 @@ def _mesh_stats(gmsh) -> dict:
             gmsh.model.mesh.getNodes()[0], "size") else len(gmsh.model.mesh.getNodes()[0]),
         "conteggi_tipi": dict(zip(tipi, conteggi)),
     }
+
+
+
+
+def _run_isolated_gmsh(operation: str, parameters: dict) -> dict:
+    """Esegue Gmsh in un processo separato su Windows.
+
+    Gmsh e pythonocc distribuiscono runtime native OpenCASCADE che possono
+    collidere nello stesso processo. L'isolamento impedisce che la finalize()
+    di Gmsh provochi una Access Violation nell'applicazione Qt.
+    """
+    payload = json.dumps(parameters, ensure_ascii=False)
+    output_path = parameters.get("out_msh")
+    previous_output = None
+    if output_path and os.path.isfile(output_path):
+        try:
+            st = os.stat(output_path)
+            previous_output = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            pass
+    env = os.environ.copy()
+    env["GCS_GMSH_ISOLATED_CHILD"] = "1"
+    command = [sys.executable, "-m", "gcs.core.gmsh_bridge",
+               "--worker", operation, payload]
+    kwargs = {"capture_output": True, "text": True, "env": env, "check": False}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(command, **kwargs)
+    marker = "__GCS_GMSH_RESULT__="
+    for line in reversed((result.stdout or "").splitlines()):
+        if line.startswith(marker):
+            try:
+                return json.loads(line[len(marker):])
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Risposta JSON non valida dal processo Gmsh isolato") from exc
+
+    # Alcune build native di Gmsh possono terminare con Access Violation
+    # durante finalize() dopo aver scritto correttamente il file. In tal caso
+    # il processo padre rimane vivo e considera riuscita l'operazione solo se
+    # il file di output è stato effettivamente creato/modificato in questa run.
+    if output_path and os.path.isfile(output_path):
+        try:
+            st = os.stat(output_path)
+            current_output = (st.st_size, st.st_mtime_ns)
+            if st.st_size > 0 and current_output != previous_output:
+                return {
+                    "output": os.path.abspath(output_path),
+                    "bytes": st.st_size,
+                    "warning": (
+                        "Gmsh ha scritto il file ma il processo worker è terminato "
+                        f"con codice {result.returncode} durante la chiusura"
+                    ),
+                }
+        except OSError:
+            pass
+    details = "\n".join(part for part in (result.stderr, result.stdout) if part)
+    details = details[-6000:] if details else "nessun dettaglio restituito"
+    raise RuntimeError(
+        f"Processo Gmsh isolato terminato con codice {result.returncode}:\n{details}"
+    )
+
+
+def mesh_step(step_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
+              order: int = 1, algo3d: str = "HXT", msh_version: str = "4.1",
+              save_physicals: bool = True) -> dict:
+    """Genera una mesh STEP; su Windows isola Gmsh dalle librerie native Qt/OCC."""
+    params = {"step_path": step_path, "out_msh": out_msh, "clmax": clmax,
+              "clmin": clmin, "order": order, "algo3d": algo3d,
+              "msh_version": msh_version, "save_physicals": save_physicals}
+    if os.name == "nt" and os.environ.get("GCS_GMSH_ISOLATED_CHILD") != "1":
+        return _run_isolated_gmsh("mesh_step", params)
+    return _mesh_step_inprocess(**params)
+
+
+def mesh_brep(brep_path: str, out_msh: str, clmax: float = 5.0, clmin: float = 0.0,
+              order: int = 1, algo3d: str = "HXT",
+              msh_version: str = "4.1") -> dict:
+    """Genera una mesh BREP; su Windows isola Gmsh dalle librerie native Qt/OCC."""
+    params = {"brep_path": brep_path, "out_msh": out_msh, "clmax": clmax,
+              "clmin": clmin, "order": order, "algo3d": algo3d,
+              "msh_version": msh_version}
+    if os.name == "nt" and os.environ.get("GCS_GMSH_ISOLATED_CHILD") != "1":
+        return _run_isolated_gmsh("mesh_brep", params)
+    return _mesh_brep_inprocess(**params)
+
+
+def mesh_structured(
+    step_path: str,
+    out_msh: str,
+    dimension: int = 3,
+    nodes_per_curve: int = 11,
+    recombine: bool = True,
+    msh_version: str = "4.1",
+    surface_tags: Optional[List[int]] = None,
+    volume_tags: Optional[List[int]] = None,
+) -> dict:
+    """Genera mesh strutturata; su Windows isola Gmsh dal processo Qt/OCC."""
+    params = {"step_path": step_path, "out_msh": out_msh, "dimension": dimension,
+              "nodes_per_curve": nodes_per_curve, "recombine": recombine,
+              "msh_version": msh_version, "surface_tags": surface_tags,
+              "volume_tags": volume_tags}
+    if os.name == "nt" and os.environ.get("GCS_GMSH_ISOLATED_CHILD") != "1":
+        return _run_isolated_gmsh("mesh_structured", params)
+    return _mesh_structured_inprocess(**params)
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +385,7 @@ def export_msh_22(model: MeshModel, path: str,
 # structured quad / hex meshing (Gmsh transfinite)
 # ---------------------------------------------------------------------------
 
-def mesh_structured(
+def _mesh_structured_inprocess(
     step_path: str,
     out_msh: str,
     dimension: int = 3,
@@ -384,3 +491,25 @@ def mesh_structured(
         return stats
     finally:
         gmsh.finalize()
+
+
+if __name__ == "__main__":
+    # Entry point interno per il processo Gmsh isolato: stdout può contenere
+    # il normale log Gmsh; il risultato è riconoscibile tramite un marker.
+    if len(sys.argv) >= 4 and sys.argv[1] == "--worker":
+        _operation = sys.argv[2]
+        _parameters = json.loads(sys.argv[3])
+        _workers = {
+            "mesh_step": _mesh_step_inprocess,
+            "mesh_brep": _mesh_brep_inprocess,
+            "mesh_structured": _mesh_structured_inprocess,
+        }
+        if _operation not in _workers:
+            raise SystemExit(f"Operazione Gmsh non supportata: {_operation}")
+        try:
+            _result = _workers[_operation](**_parameters)
+            print("__GCS_GMSH_RESULT__=" + json.dumps(_result, ensure_ascii=False))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(1)

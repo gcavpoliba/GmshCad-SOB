@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QObject, Signal, QEvent
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QMenu
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QMenu, QSizePolicy
 
 from gcs.core.document import CADDocument
 from gcs.core import occ_utils as ou
@@ -105,8 +105,13 @@ class Viewer3D(QWidget):
                 f"Verifica l'installazione di pythonocc-core ({_VIEWER_ERR})")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._canvas = _canvas_cls(self)
-        lay.addWidget(self._canvas)
+        self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Il canvas resta figlio del central widget e si espande con l'area
+        # disponibile tra le palette laterali.
+        lay.addWidget(self._canvas, 1)
         self._display = getattr(self._canvas, "_display", None)
         # InitDriver può richiedere un winId valido: prova subito, altrimenti
         # viene rimandato al primo showEvent
@@ -1094,19 +1099,27 @@ class Viewer3D(QWidget):
     def eventFilter(self, watched, event):
         if watched == self._canvas:
             etype = event.type()
+            if etype not in (QEvent.MouseMove, QEvent.MouseButtonPress,
+                             QEvent.MouseButtonRelease):
+                return super().eventFilter(watched, event)
+            # Qt 6 depreca QMouseEvent.pos(); position() mantiene le coordinate
+            # locali al canvas ed evita warning ripetuti durante il movimento.
+            pos = (event.position().toPoint()
+                   if hasattr(event, "position") else event.pos())
             if etype == QEvent.MouseMove:
-                self._update_hover_info(event.pos())
+                self._update_hover_info(pos)
             elif etype == QEvent.MouseButtonPress:
                 if event.button() == Qt.RightButton:
-                    self._rclick_press_pos = event.pos()
+                    self._rclick_press_pos = pos
             elif etype == QEvent.MouseButtonRelease:
                 if event.button() == Qt.RightButton and self._rclick_press_pos is not None:
-                    delta = (event.pos() - self._rclick_press_pos).manhattanLength()
+                    delta = (pos - self._rclick_press_pos).manhattanLength()
                     self._rclick_press_pos = None
                     if delta <= 6:
-                        # Click singolo tasto destro: apri menu contestuale
-                        gpos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
-                        self._show_viewport_context_menu(gpos, event.pos())
+                        # Click singolo tasto destro: apri menu contestuale.
+                        gpos = (event.globalPosition().toPoint()
+                                if hasattr(event, "globalPosition") else event.globalPos())
+                        self._show_viewport_context_menu(gpos, pos)
                         return True
         return super().eventFilter(watched, event)
 
@@ -1130,8 +1143,10 @@ class Viewer3D(QWidget):
         self.redraw_all(fit=True)
 
     def _show_viewport_context_menu(self, global_pos, click_pos):
-        menu = QMenu(self)
+        # Il menu appartiene alla finestra principale, non al widget nativo OCC:
+        # evita che Qt tenti di creare una QWidgetWindow per il viewer annidato.
         win = self.window()
+        menu = QMenu(win)
 
         # Tentativo di rilevare la forma sotto al puntatore mouse
         if self._display and getattr(self._display, "Context", None) and getattr(self._display, "View", None):

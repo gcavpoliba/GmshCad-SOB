@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import traceback
 
-from PySide6.QtCore import Qt, QProcess, QSettings
+from PySide6.QtCore import Qt, QProcess, QSettings, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (QDialog, QMainWindow, QDockWidget, QTabWidget, QToolBar,
                                QMessageBox, QFileDialog, QInputDialog, QLabel,
@@ -42,7 +42,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{__app_name__} {__version__}")
-        self.resize(1500, 950)
+        self.setMinimumSize(640, 560)
+        self.resize(1500, 900)
         self.doc = CADDocument()
         self.builder = GeometryBuilder(self.doc)
         self.editor = GeometryEditor(self.doc)
@@ -59,6 +60,9 @@ class MainWindow(QMainWindow):
                 visibility_manager=self.visibility_manager,
             )
             self.visibility_manager.attach_viewer(self.viewer)
+            # pythonocc può assegnare al viewer un minimumSize molto alto, che
+            # impedisce alla finestra di adattarsi a monitor con poca altezza.
+            self.viewer.setMinimumSize(240, 220)
             self.setCentralWidget(self.viewer)
         except Exception as exc:
             self.visibility_manager = VisibilityManager(self.doc)
@@ -101,12 +105,16 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.macro_panel, "Macro")
 
         d1 = QDockWidget("Albero", self)
+        d1.setObjectName("dock_entity_tree")
+        d1.setMinimumSize(180, 120)
         d1.setWidget(self.tree_panel)
         d1.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         self.addDockWidget(Qt.LeftDockWidgetArea, d1)
 
         self.flow_panel = OpenSeesFlowPanel(self.doc)
         self.flow_dock = QDockWidget("Workflow OpenSees — Fasi / Tcl", self)
+        self.flow_dock.setObjectName("dock_opensees_workflow")
+        self.flow_dock.setMinimumSize(180, 100)
         self.flow_dock.setWidget(self.flow_panel)
         self.flow_dock.setFeatures(
             QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -114,14 +122,20 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(d1, self.flow_dock, Qt.Vertical)
 
         d2 = QDockWidget("Proprietà", self)
+        d2.setObjectName("dock_properties")
+        d2.setMinimumSize(180, 120)
         d2.setWidget(self.props_panel)
         self.addDockWidget(Qt.RightDockWidgetArea, d2)
         d3 = QDockWidget("Console e macro", self)
+        d3.setObjectName("dock_console_log_macro")
+        d3.setMinimumSize(240, 90)
         d3.setWidget(tabs)
         self.addDockWidget(Qt.BottomDockWidgetArea, d3)
 
         self.command_line = CommandLineWidget()
         self._command_dock = QDockWidget("Command line", self)
+        self._command_dock.setObjectName("dock_command_line")
+        self._command_dock.setMinimumSize(240, 44)
         self._command_dock.setWidget(self.command_line)
         self._command_dock.setFeatures(
             QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
@@ -140,9 +154,11 @@ class MainWindow(QMainWindow):
         self._dock_command = self._command_dock
 
         # ---------- menu e toolbar
+        self._gui_actions = []
         self._setup_command_registry()
         self._build_menus()
         self._build_toolbars()
+        self._register_gui_action_commands()
         self._set_mode("geometria")
         self._status_left = QLabel("Pronto")
         self._status_right = QLabel("Modalità: Geometria | 0 entità")
@@ -151,8 +167,12 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(self._status_right)
         self.setStatusBar(sb)
         self._restore_ui_state()
+        # La finestra CAD deve occupare lo schermo; lo stato salvato in QSettings
+        # non deve lasciare il viewer confinato in una geometria precedente.
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
         self._carica_macro()
         self._refresh_all()
+        QTimer.singleShot(0, self._apply_startup_layout)
 
     # ================================================================ costruzione UI
     def _build_menus(self):
@@ -917,7 +937,64 @@ class MainWindow(QMainWindow):
             CommandSpec("VALIDATE", lambda a: self.act_validate_opensees_model(),
                         "Validazione OpenSees", "VALIDATE"),
         ]
+        self._base_command_specs = list(specs)
+        self.command_line.set_commands(self._base_command_specs)
+
+    def _register_gui_action_commands(self):
+        """Espone ogni QAction anche dalla command line, senza duplicare la logica.
+
+        I comandi GUI_* attivano esattamente la stessa QAction di menu/toolbar;
+        quindi dialoghi, controlli di stato e logica restano condivisi.
+        """
+        specs = list(getattr(self, "_base_command_specs", []))
+        used = {spec.name.upper() for spec in specs}
+        self._gui_action_command_names = {}
+        for action in getattr(self, "_gui_actions", []):
+            label = action.text().replace("&", "").replace("…", "")
+            import re
+            stem = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_").upper()
+            stem = stem or "ACTION"
+            name = "GUI_" + stem
+            suffix = 2
+            while name in used:
+                name = f"GUI_{stem}_{suffix}"
+                suffix += 1
+            used.add(name)
+            self._gui_action_command_names[id(action)] = name
+            specs.append(CommandSpec(
+                name,
+                lambda args, act=action: act.trigger(),
+                f"Esegue l'azione GUI: {label}",
+                name,
+            ))
         self.command_line.set_commands(specs)
+        self._log(f"Command line pronta: {len(specs)} comandi disponibili (HELP per l'elenco).")
+
+    def _apply_startup_layout(self):
+        """Massimizza la finestra e ripristina proporzioni utili delle palette."""
+        try:
+            self.showMaximized()
+            # Le palette restano laterali/inferiori; il viewer centrale assorbe
+            # tutto lo spazio residuo invece di conservare dimensioni obsolete.
+            self.resizeDocks([self._dock_tree], [250], Qt.Horizontal)
+            self.resizeDocks([self._dock_props], [285], Qt.Horizontal)
+            self.resizeDocks([self._dock_tree, self._dock_flow], [300, 190], Qt.Vertical)
+            self.resizeDocks([self._dock_command, self._dock_console], [42, 165], Qt.Vertical)
+            self.viewer.updateGeometry()
+            canvas = getattr(self.viewer, "_canvas", None)
+            if canvas is not None:
+                canvas.updateGeometry()
+                canvas.update()
+        except Exception as exc:
+            self._log(f"Layout iniziale: {type(exc).__name__}: {exc}")
+
+    def _trace_gui_action(self, label, slot, action=None):
+        callback = getattr(slot, "__name__", None) or type(slot).__name__
+        command = getattr(self, "_gui_action_command_names", {}).get(id(action), "")
+        route = f"{command} | " if command else ""
+        self._log(f"[GUI] {route}{label} → {callback}")
+        if hasattr(self, "command_line"):
+            self.command_line.set_state(f"GUI: {label}")
 
     def _command_help_text(self):
         seen=set(); lines=[]
@@ -1304,7 +1381,13 @@ class MainWindow(QMainWindow):
                   self._dock_command,self._dock_console):
             d.show()
             d.setFloating(False)
-        self.resize(1500,950)
+        self.resize(1500, 900)
+        # Mantiene il layout entro l'area disponibile dopo il ripristino dei dock.
+        screen = self.screen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.resize(min(self.width(), available.width()),
+                        min(self.height(), available.height()))
         self._set_mode("geometria")
         self._log("Layout UI ripristinato")
 
@@ -1314,14 +1397,26 @@ class MainWindow(QMainWindow):
 
     def _act(self, testo, slot, shortcut=None) -> QAction:
         a = QAction(testo, self)
+        # La traccia viene scritta prima dell'esecuzione, sia per menu sia per
+        # toolbar e menu contestuali costruiti con questa factory.
+        a.triggered.connect(
+            lambda checked=False, label=testo, callback=slot, action=a:
+            self._trace_gui_action(label, callback, action)
+        )
         a.triggered.connect(slot)
         if shortcut:
             a.setShortcut(QKeySequence(shortcut))
+        if hasattr(self, "_gui_actions"):
+            self._gui_actions.append(a)
         return a
 
     def _log(self, msg):
+        # Tutti gli eventi e i percorsi dei comandi sono visibili anche nella
+        # Console Python, oltre che nel tab Log e nella barra di stato.
         if hasattr(self, "log_panel"):
             self.log_panel.log(msg)
+        if hasattr(self, "console"):
+            self.console.log(msg)
         if hasattr(self, "_status_left"):
             self._status_left.setText(str(msg))
 

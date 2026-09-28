@@ -1580,14 +1580,19 @@ class OpenSeesFEMDialog(QDialog):
         "Concrete01": ("fpc", "epsc0", "fpcu", "epsU"),
     }
 
-    def __init__(self, doc, parent=None):
+    def __init__(self, doc, parent=None, focus_entity_id=None,
+                 focus_assignment=None):
         super().__init__(parent)
         self.doc = doc
         self.manager = doc.opensees
         self.model = list(doc.mesh_models.values())[-1] if doc.mesh_models else None
+        self.focus_entity_id = int(focus_entity_id) if focus_entity_id is not None else None
+        self.focus_assignment = focus_assignment
         self.setWindowTitle("Modello FEM OpenSees")
         self.setMinimumSize(640, 520)
         self._build_ui()
+        if self.focus_assignment is not None or self.focus_entity_id is not None:
+            self._focus_element_assignment()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -1727,6 +1732,7 @@ class OpenSeesFEMDialog(QDialog):
 
         self.element_command = QComboBox()
         self.element_command.currentIndexChanged.connect(self._on_element_command_changed)
+        self.element_material.currentIndexChanged.connect(self._update_element_reference)
         self.element_entity.currentIndexChanged.connect(self._refresh_element_commands)
 
         self.dimension = QComboBox()
@@ -1758,10 +1764,14 @@ class OpenSeesFEMDialog(QDialog):
         form.addRow("Spessore 2D", self.element_thickness)
         form.addRow("Comportamento piano", self.plane_type)
         form.addRow("Argomenti u-p / tail Tcl", self.element_args)
+        self.element_reference = QLabel("Seleziona un elemento per vedere la scheda FEM.")
+        self.element_reference.setWordWrap(True)
+        self.element_reference.setStyleSheet("QLabel { padding: 6px; border: 1px solid #666; }")
+        form.addRow("Riferimento FEM", self.element_reference)
 
-        add = QPushButton("Assegna elemento + proprietà fisiche")
-        add.clicked.connect(self._assign_elements)
-        form.addRow(add)
+        self.btn_assign_elements = QPushButton("Assegna elemento + proprietà fisiche")
+        self.btn_assign_elements.clicked.connect(self._assign_elements)
+        form.addRow(self.btn_assign_elements)
 
         self.element_list = QListWidget()
         form.addRow("Assegnazioni", self.element_list)
@@ -1774,6 +1784,51 @@ class OpenSeesFEMDialog(QDialog):
                     f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
         self.tabs.addTab(page, "Elementi")
         self._refresh_element_commands()
+
+    def _focus_element_assignment(self):
+        """Precompila il tab Elementi per modificare un'assegnazione esistente."""
+        if not hasattr(self, "element_entity"):
+            return
+        entity_id = self.focus_entity_id
+        assignment = self.focus_assignment
+
+        if entity_id is None and assignment is not None:
+            entity_id = assignment.entity_id
+        if entity_id is None:
+            return
+
+        idx = self.element_entity.findData(entity_id)
+        if idx < 0:
+            return
+        self.element_entity.setCurrentIndex(idx)
+
+        # Il cambio entità rigenera le opzioni comando.
+        if assignment is not None:
+            self.element_material.setCurrentIndex(
+                max(0, self.element_material.findData(assignment.material_tag)))
+            command = assignment.effective_command()
+            cmd_idx = self.element_command.findData(command)
+            if cmd_idx >= 0:
+                self.element_command.setCurrentIndex(cmd_idx)
+            self.element_ids_filter.setText(
+                ", ".join(str(int(eid)) for eid in assignment.element_ids))
+            self.element_area.setValue(float(assignment.area))
+            self.element_thickness.setValue(float(assignment.thickness))
+            plane_idx = self.plane_type.findText(assignment.plane_type)
+            if plane_idx >= 0:
+                self.plane_type.setCurrentIndex(plane_idx)
+            self.element_args.setText(str(assignment.element_args or ""))
+            self.btn_assign_elements.setText(
+                f"Aggiorna assegnazione FEM ({len(assignment.element_ids)} elementi)"
+            )
+            self.element_reference.setText(
+                self.element_reference.text()
+                + "<br><b>MODIFICA:</b> i dati sopra sostituiranno la proprietà "
+                  "FEM degli elementi selezionati."
+            )
+            self.tabs.setCurrentIndex(1)
+        else:
+            self.tabs.setCurrentIndex(1)
 
     def _refresh_element_commands(self):
         if not hasattr(self, "element_command"):
@@ -1839,6 +1894,37 @@ class OpenSeesFEMDialog(QDialog):
         if hasattr(self, "element_args"):
             self._refresh_element_args()
 
+    def _update_element_reference(self):
+        if not hasattr(self, "element_reference"):
+            return
+        entity_id = self.element_entity.currentData()
+        command = self.element_command.currentData()
+        if entity_id is None or not command:
+            self.element_reference.setText("Seleziona un'entità meshata e un elemento OpenSees.")
+            return
+        gmsh_type = self.element_type_by_entity.get(entity_id, "?")
+        info = GEOTECH_ELEMENTS.get(command, {})
+        family = info.get("family", "standard")
+        ndm, ndf = self.dimension.currentData()
+        material_tag = self.element_material.currentData() if hasattr(self, "element_material") else None
+        mat = next((m for m in self.manager.materials if m.tag == material_tag), None)
+        mat_text = f"{mat.tag} — {mat.name} ({mat.model})" if mat else "da assegnare"
+        props = []
+        if family == "u-p":
+            props.append("pressure DOF: presente")
+        if "thick" in (info.get("args", "") or ""):
+            props.append("spessore")
+        if "area" in (info.get("args", "") or ""):
+            props.append("area")
+        self.element_reference.setText(
+            f"<b>Gmsh {gmsh_type} → OpenSees {command}</b><br>"
+            f"Famiglia: {family} · ndm={ndm}, ndf={ndf}<br>"
+            f"Materiale: {mat_text}<br>"
+            f"Proprietà da inserire: area={self.element_area.value():g}, "
+            f"thickness={self.element_thickness.value():g}"
+            + (f"<br>u-p: {', '.join(props) or 'parametri specifici'}" if family == "u-p" else "")
+        )
+
     def _assign_elements(self):
         entity_id = self.element_entity.currentData()
         material_tag = self.element_material.currentData()
@@ -1883,6 +1969,7 @@ class OpenSeesFEMDialog(QDialog):
         self.element_list.addItem(
             f"{self.doc.entities[entity_id].name}: {assignment.effective_command()} "
             f"({len(assignment.element_ids)} elementi), materiale {assignment.material_tag}")
+        self._update_element_reference()
     def _build_node_tab(self):
         page = QWidget()
         form = QFormLayout(page)

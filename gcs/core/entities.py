@@ -104,6 +104,13 @@ class Entity:
         """True se l'entità è un blocco di mesh importato (display on-the-fly)."""
         return "mesh_ref" in self.meta
 
+    @property
+    def visibility_state(self) -> str:
+        return "ON" if self.visible else "OFF"
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = bool(visible)
+
     def mesh_ref(self):
         """Restituisce (nome_modello, dim, tag) per i blocchi mesh, altrimenti None."""
         return self.meta.get("mesh_ref")

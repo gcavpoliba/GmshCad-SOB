@@ -80,8 +80,8 @@ class Viewer3D(QWidget):
         self._drag_last = None           # ultima posizione QPoint del drag
         self._ghost = None               # AIS temporaneo di anteprima
         # ----- visualizzazione ausiliaria (toggle da menu Vista)
-        self.show_node_labels = False    # etichette numeriche nodi (OpenSees tag)
-        self.show_element_labels = False  # etichette numeriche elementi
+        self.show_node_labels = False    # etichette numeriche nodi mesh
+        self.show_element_labels = False  # etichette numeriche elementi mesh
         self.show_load_arrows = True     # frecce per i carichi nodali
         self.show_constraint_symbols = True  # simboli vincoli
         self._label_ais = []             # AIS delle etichette (per pulizia)
@@ -497,8 +497,8 @@ class Viewer3D(QWidget):
     def _disegna_etichette_numerazione(self):
         """Disegna le etichette numeriche di nodi e elementi.
 
-        Usa AIS_TextLabel di OCC per renderizzare i tag (1-based, come da
-        convenzione OpenSees). Il toggle è controllato da `show_node_labels`
+        Usa AIS_TextLabel di OCC per renderizzare gli identificativi della mesh.
+        Questi numeri sono tag mesh/Gmsh e NON sono i tag OpenSees. Il toggle è controllato da `show_node_labels`
         e `show_element_labels`.
         """
         if not self._display:
@@ -524,7 +524,7 @@ class Viewer3D(QWidget):
                 for nid, coord in model.nodes.items():
                     try:
                         lbl = AIS_TextLabel()
-                        lbl.SetText(str(nid))
+                        lbl.SetText(f"N{nid}")
                         lbl.SetPosition(gp_Pnt(*coord))
                         lbl.SetColor(Quantity_Color(Quantity_NameOfColor.yellow))
                         self._display.Context.Display(lbl, True)
@@ -556,7 +556,7 @@ class Viewer3D(QWidget):
                         cy = sum(c[1] for c in coords) / len(coords)
                         cz = sum(c[2] for c in coords) / len(coords)
                         lbl = AIS_TextLabel()
-                        lbl.SetText(f"E{eid}")
+                        lbl.SetText(f"M{eid}")
                         lbl.SetPosition(gp_Pnt(cx, cy, cz))
                         lbl.SetColor(Quantity_Color(Quantity_NameOfColor.white))
                         self._display.Context.Display(lbl, True)

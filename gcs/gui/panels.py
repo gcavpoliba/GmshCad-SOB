@@ -40,14 +40,27 @@ class EntityTree(QWidget):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.addWidget(QLabel("Gruppi ed entità"))
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Nome", "Tipo", "Id"])
-        self.tree.setColumnWidth(0, 170)
+        self.tree.setHeaderLabels(["Visibilità / Entità", "Tipo", "Id", "FEM"])
+        self.tree.setColumnWidth(0, 230)
+        self.tree.headerItem().setToolTip(0, "Checkbox = visibilità CAD/OpenCascade; doppio click = selezione")
+        self.tree.setColumnWidth(1, 95)
+        self.tree.setColumnWidth(2, 70)
+        self.tree.setColumnWidth(3, 95)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self._on_double)
+        self.tree.currentItemChanged.connect(self._on_current_item_changed)
         self.tree.itemChanged.connect(self._on_check)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu_contesto)
-        lay.addWidget(self.tree)
+        lay.addWidget(self.tree, 3)
+
+        self.fem_details = QTextEdit()
+        self.fem_details.setReadOnly(True)
+        self.fem_details.setPlaceholderText("Seleziona un'entità o un ramo FEM per vedere proprietà e Tcl associato.")
+        self.fem_details.setFontFamily("Monospace")
+        self.fem_details.setMaximumHeight(260)
+        lay.addWidget(QLabel("Dettaglio FEM / Tcl"))
+        lay.addWidget(self.fem_details, 1)
 
     # -------------------------------------------------------------- refresh
     def refresh(self):
@@ -61,13 +74,16 @@ class EntityTree(QWidget):
                 it = QTreeWidgetItem([nome, "Gruppo", ""])
                 it.setData(0, Qt.UserRole + 1, nome)
                 it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-                it.setCheckState(0, Qt.Checked)
+                group_visible = all(self.doc.entities.get(eid).visible
+                                  for eid in g.member_ids if self.doc.entities.get(eid))
+                it.setCheckState(0, Qt.Checked if group_visible else Qt.Unchecked)
                 it.setForeground(0, QBrush(QColor("#D08770")))
                 dati = [("geo", eid) for eid in sorted(g.member_ids)]
                 for kind, eid in dati:
                     e = self.doc.entities.get(eid)
                     if e:
                         figlio = self._entity_item(e)
+                        self._populate_entity_fem(figlio, e)
                         it.addChild(figlio)
                 for mname, els in g.mesh_elements.items():
                     figlio = QTreeWidgetItem(
@@ -92,31 +108,542 @@ class EntityTree(QWidget):
                 in_gruppi |= g.member_ids
             for e in sorted(self.doc.entities.values(), key=lambda x: x.id):
                 if e.id not in in_gruppi:
-                    self.tree.addTopLevelItem(self._entity_item(e))
-            self.tree.expandAll()
+                    item = self._entity_item(e)
+                    self._populate_entity_fem(item, e)
+                    self.tree.addTopLevelItem(item)
+            self.tree.expandToDepth(2)
         finally:
             self._updating = False
 
     def _entity_item(self, e) -> QTreeWidgetItem:
         fem_marks = e.meta.get("fem_marks", [])
         suffix = f" [{', '.join(fem_marks)}]" if fem_marks else ""
-        it = QTreeWidgetItem([e.name + suffix, NOME_TIPO_IT.get(e.etype, e.etype), str(e.id)])
+        status = self._entity_fem_status(e)
+        it = QTreeWidgetItem([
+            e.name + suffix,
+            NOME_TIPO_IT.get(e.etype, e.etype),
+            str(e.id),
+            status,
+        ])
         it.setData(0, Qt.UserRole, e.id)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(0, Qt.Checked if e.visible else Qt.Unchecked)
         fem_color = e.meta.get("fem_color")
         color = QColor.fromRgbF(*fem_color) if fem_color else QColor(
             COLORE_TIPO.get(e.etype, "#CCCCCC"))
         it.setForeground(0, QBrush(color))
+        it.setToolTip(0, "Checkbox = visibilità CAD/OpenCascade; doppio click = selezione. "
+                         "Il ramo FEM mostra ciò che verrà scritto nel Tcl.")
+        it.setToolTip(3, status)
         if fem_marks:
             it.setToolTip(0, "Associazioni FEM: " + "; ".join(fem_marks))
         if e.id in self.doc.selection:
             it.setBackground(0, QBrush(QColor("#434C5E")))
         return it
 
+    def _entity_groups(self, entity_id):
+        return [
+            name for name, group in self.doc.groups.groups.items()
+            if int(entity_id) in {int(x) for x in group.member_ids}
+        ]
+
+    def _entity_fem_status(self, entity):
+        manager = getattr(self.doc, "opensees", None)
+        if manager is None:
+            return "CAD"
+        ref = entity.meta.get("mesh_ref")
+        assignments = [a for a in manager.element_assignments
+                       if int(a.entity_id) == int(entity.id)]
+        if ref and not assignments:
+            return "⚠ FEM"
+        if assignments:
+            material_tags = {int(a.material_tag) for a in assignments}
+            defined = {int(m.tag) for m in manager.materials}
+            if not material_tags.issubset(defined):
+                return "⚠ MAT"
+            if any(a.is_up and not str(a.element_args).strip() for a in assignments):
+                return "⚠ u-p"
+            if ref:
+                total = len(self._mesh_element_ids(entity))
+                assigned = len({int(eid) for a in assignments for eid in a.element_ids})
+                if total and assigned < total:
+                    return "⚠ PART"
+            return "OK"
+        return "CAD"
+
+    def _add_category(self, parent, label, kind, eid):
+        item = QTreeWidgetItem([label, kind, "", ""])
+        item.setData(0, Qt.UserRole, int(eid))
+        item.setData(0, Qt.UserRole + 5, "category")
+        parent.addChild(item)
+        item.setExpanded(True)
+        return item
+
+    def _add_leaf(self, parent, label, kind, value="", eid=None,
+                  extra_kind="", model_name="", element_ids=None):
+        item = QTreeWidgetItem([label, kind, str(value), ""])
+        if eid is not None:
+            item.setData(0, Qt.UserRole, int(eid))
+        if extra_kind:
+            item.setData(0, Qt.UserRole + 5, extra_kind)
+        if model_name:
+            item.setData(0, Qt.UserRole + 6, str(model_name))
+        if element_ids is not None:
+            item.setData(0, Qt.UserRole + 7, [int(x) for x in element_ids])
+        parent.addChild(item)
+        return item
+
+    def _populate_entity_fem(self, root, entity):
+        """Costruisce la vista relazionale CAD → mesh → FEM → condizioni → fase."""
+        manager = getattr(self.doc, "opensees", None)
+        if manager is None:
+            return
+
+        assignments = [a for a in manager.element_assignments
+                       if int(a.entity_id) == int(entity.id)]
+        ref = entity.meta.get("mesh_ref")
+        model = self.doc.mesh_models.get(ref[0]) if ref else None
+        mesh_elements = []
+        if ref and model is not None:
+            block = model.blocks.get((int(ref[1]), int(ref[2])))
+            if block:
+                mesh_elements = sorted(int(x) for x in block.element_ids)
+
+        if ref:
+            mesh_node = self._add_category(
+                root,
+                f"Mesh → {ref[0]} · dim {ref[1]} · tag {ref[2]}",
+                "MESH", entity.id)
+            self._add_leaf(
+                mesh_node, f"Elementi mesh: {len(mesh_elements)}", "Gmsh",
+                f"{mesh_elements[:8]}{' …' if len(mesh_elements) > 8 else ''}",
+                entity.id, "mesh", ref[0], mesh_elements)
+            if model is not None:
+                nodes = sorted(model.nodes_of_elements(mesh_elements)) if mesh_elements else []
+                self._add_leaf(
+                    mesh_node, f"Nodi mesh: {len(nodes)}", "Gmsh",
+                    f"{nodes[:8]}{' …' if len(nodes) > 8 else ''}", entity.id)
+
+        if assignments:
+            fem_node = self._add_category(
+                root, f"Elementi FEM ({len(assignments)} assegnazioni)", "FEM", entity.id)
+            for assignment in assignments:
+                cmd = assignment.effective_command()
+                item = self._add_leaf(
+                    fem_node, f"{cmd} · {len(assignment.element_ids)} elem.",
+                    "OpenSees", assignment.material_tag, entity.id,
+                    "assignment", assignment.model_name, assignment.element_ids)
+                item.setToolTip(
+                    0, f"Gmsh {assignment.gmsh_type} → OpenSees {cmd} | "
+                        f"materiale {assignment.material_tag} | "
+                        f"area={assignment.area:g} | thickness={assignment.thickness:g}")
+                mat = next((m for m in manager.materials
+                            if int(m.tag) == int(assignment.material_tag)), None)
+                self._add_leaf(
+                    item, f"Materiale {assignment.material_tag} — "
+                          f"{mat.name if mat else 'NON DEFINITO'}",
+                    "Materiale", mat.model if mat else "ERRORE", entity.id)
+                if assignment.section_tag is not None:
+                    sec = next((s for s in manager.sections
+                                if int(s.tag) == int(assignment.section_tag)), None)
+                    self._add_leaf(
+                        item, f"Sezione {assignment.section_tag} — "
+                              f"{sec.model if sec else 'NON DEFINITA'}",
+                        "Section", sec.name if sec else "ERRORE", entity.id)
+                if assignment.gmsh_type in (2, 3) or float(assignment.thickness) != 1.0:
+                    self._add_leaf(item, f"Thickness = {assignment.thickness:g}",
+                                   "Property", "", entity.id)
+                if assignment.gmsh_type == 1 or float(assignment.area) != 1.0:
+                    self._add_leaf(item, f"Area = {assignment.area:g}",
+                                   "Property", "", entity.id)
+                self._add_leaf(
+                    item,
+                    "u-p = YES · DOF pressione presente" if assignment.is_up else "u-p = NO",
+                    "u-p", assignment.element_args if assignment.is_up else "",
+                    entity.id)
+                if assignment.transf_tag is not None:
+                    transf = next((t for t in manager.geom_transfs
+                                   if int(t.tag) == int(assignment.transf_tag)), None)
+                    self._add_leaf(
+                        item, f"geomTransf {assignment.transf_tag}", "geomTransf",
+                        transf.transf_type if transf else "NON DEFINITA", entity.id)
+                if assignment.integration_tag is not None:
+                    integ = next((b for b in manager.beam_integrations
+                                  if int(b.tag) == int(assignment.integration_tag)), None)
+                    self._add_leaf(
+                        item, f"beamIntegration {assignment.integration_tag}", "Integration",
+                        integ.integration_type if integ else "NON DEFINITA", entity.id)
+                self._add_phase_nodes(item, [assignment.material_tag], entity.id)
+
+        groups = set(self._entity_groups(entity.id))
+        constraint_items = []
+        for cons in manager.constraints:
+            if entity.id in cons.entity_ids or groups.intersection(str(x) for x in cons.group_names):
+                constraint_items.append((
+                    f"FIX {cons.cid} · {cons.name}",
+                    f"DOF {cons.dof_flags(manager.ndf)}"))
+        for eq in manager.equaldofs:
+            if (eq.master_entity_id == entity.id or eq.slave_entity_id == entity.id
+                    or (eq.master_group and eq.master_group in groups)
+                    or (eq.slave_group and eq.slave_group in groups)):
+                role = "Master" if (
+                    eq.master_entity_id == entity.id or
+                    (eq.master_group and eq.master_group in groups)
+                ) else "Slave"
+                constraint_items.append((
+                    f"EqualDOF {eq.eid} · {eq.name}",
+                    role + f" · DOF {eq.dofs}"))
+        for disp in manager.prescribed_displacements:
+            if entity.id in disp.entity_ids:
+                constraint_items.append((
+                    f"SP · {disp.name}", f"DOF {disp.dof} = {disp.value:g}"))
+        if constraint_items:
+            cnode = self._add_category(
+                root, f"Vincoli ({len(constraint_items)})", "BC", entity.id)
+            for label, value in constraint_items:
+                self._add_leaf(cnode, label, "OpenSees", value, entity.id)
+
+        load_items = []
+        for load in manager.loads:
+            if (entity.id in load.entity_ids or
+                    groups.intersection(str(x) for x in load.group_names)):
+                load_items.append((
+                    f"LOAD {load.lid} · {load.name}",
+                    f"F=({load.fx:g}, {load.fy:g}, {load.fz:g}) · "
+                    f"pattern {load.pattern_tag}"))
+        entity_element_ids = set(int(x) for a in assignments for x in a.element_ids)
+        for cmd in manager.element_loads:
+            if entity_element_ids.intersection(int(x) for x in cmd.element_ids):
+                load_items.append((
+                    f"eleLoad · {cmd.name}",
+                    f"{cmd.load_type} · pattern {cmd.pattern_tag}"))
+        if load_items:
+            lnode = self._add_category(
+                root, f"Load / Carichi ({len(load_items)})", "LOAD", entity.id)
+            for label, value in load_items:
+                self._add_leaf(lnode, label, "OpenSees", value, entity.id)
+
+        rec_items = []
+        for idx, recorder in enumerate(manager.recorders):
+            if entity.id in recorder.entity_ids:
+                rec_items.append(
+                    f"Recorder {idx} · {recorder.kind} · {recorder.response}")
+        if rec_items:
+            rnode = self._add_category(
+                root, f"Recorders ({len(rec_items)})", "REC", entity.id)
+            for label in rec_items:
+                self._add_leaf(rnode, label, "OpenSees", "", entity.id)
+
+        param_items = []
+        for binding in manager.parameter_bindings:
+            if (binding.target_type == "element" and
+                    int(binding.target_id) in entity_element_ids):
+                param_items.append(f"parameter {binding.tag} → {binding.path}")
+        if param_items:
+            pnode = self._add_category(
+                root, f"Parameter ({len(param_items)})", "PARAM", entity.id)
+            for label in param_items:
+                self._add_leaf(pnode, label, "OpenSees", "", entity.id)
+
+        interface_items = []
+        for interface in manager.interfaces:
+            if entity.id in (interface.secondary_entity_id, interface.primary_entity_id):
+                role = "secondary" if entity.id == interface.secondary_entity_id else "primary"
+                interface_items.append(
+                    f"Interface {role} · {len(interface.secondary_nodes) - 1} segmenti")
+        if interface_items:
+            inode = self._add_category(
+                root, f"Interfacce ({len(interface_items)})", "IF", entity.id)
+            for label in interface_items:
+                self._add_leaf(inode, label, "OpenSees", "", entity.id)
+
+        self._add_phase_nodes(
+            root, [a.material_tag for a in assignments], entity.id,
+            include_default=bool(assignments or ref or constraint_items or load_items))
+
+    def _add_phase_nodes(self, parent, material_tags, eid, include_default=True):
+        manager = getattr(self.doc, "opensees", None)
+        if manager is None:
+            return
+        tags = {int(x) for x in (material_tags if isinstance(material_tags, (list, tuple, set))
+                                 else [material_tags]) if x is not None}
+        phases = []
+        if include_default:
+            phases.append((0, "00 · Definizione modello", "FEM/materiali/elementi"))
+        if tags:
+            for stage in manager.stages:
+                if int(stage.mat_tag) in tags:
+                    phases.append((int(stage.stage_id), stage.name, "updateMaterialStage"))
+        first_stage = min((int(s.stage_id) for s in manager.stages), default=1)
+        groups = set(self._entity_groups(eid))
+        if any(
+            int(eid) in {int(x) for x in c.entity_ids}
+            or groups.intersection(str(x) for x in c.group_names)
+            for c in manager.constraints
+        ) or any(
+            int(eid) in {int(x) for x in ld.entity_ids}
+            or groups.intersection(str(x) for x in ld.group_names)
+            for ld in manager.loads
+        ):
+            phases.append((first_stage, manager.stages[0].name if manager.stages else "Fase", "boundary/load"))
+        seen = set()
+        for phase_id, name, reason in phases:
+            key = (int(phase_id), str(name), str(reason))
+            if key in seen:
+                continue
+            seen.add(key)
+            pnode = self._add_category(
+                parent, f"Phase {phase_id:02d} · {name}", "PHASE", eid)
+            self._add_leaf(pnode, reason, "Tcl", "", eid, "phase")
+
+    def _on_current_item_changed(self, current, previous):
+        if current is None:
+            self.fem_details.clear()
+            return
+        eid = current.data(0, Qt.UserRole)
+        if eid is None:
+            self.fem_details.setPlainText(current.text(0))
+            return
+        entity = self.doc.entities.get(int(eid))
+        if entity is None:
+            self.fem_details.setPlainText(current.text(0))
+            return
+        self._show_entity_fem_details(entity, current)
+
+    def _show_entity_fem_details(self, entity, item=None):
+        manager = getattr(self.doc, "opensees", None)
+        if manager is None:
+            self.fem_details.setPlainText(
+                f"{entity.name}\nTipo: {entity.etype}\nID: {entity.id}")
+            return
+        lines = [
+            f"ENTITÀ: {entity.name}",
+            f"Tipo CAD: {NOME_TIPO_IT.get(entity.etype, entity.etype)}",
+            f"ID documento: {entity.id}",
+            f"Visibilità CAD/OpenCascade: {entity.visibility_state}",
+            "",
+        ]
+        ref = entity.meta.get("mesh_ref")
+        if ref:
+            lines += [
+                f"Mesh: {ref[0]} · dim={ref[1]} · tag={ref[2]}",
+                f"Elementi mesh: {len(self._mesh_element_ids(entity))}",
+            ]
+        assignments = [
+            a for a in manager.element_assignments
+            if int(a.entity_id) == int(entity.id)
+        ]
+        for a in assignments:
+            mat = next((m for m in manager.materials
+                        if int(m.tag) == int(a.material_tag)), None)
+            cmd = a.effective_command()
+            lines += [
+                "",
+                f"FEM: Gmsh {a.gmsh_type} → OpenSees {cmd}",
+                f"  Elementi mesh: {len(a.element_ids)}",
+                f"  Materiale: {a.material_tag} — "
+                f"{mat.name if mat else 'NON DEFINITO'}"
+                + (f" ({mat.model})" if mat else ""),
+                f"  Area: {a.area:g}",
+                f"  Thickness: {a.thickness:g}",
+                f"  Plane: {a.plane_type}",
+                f"  u-p: {'SI' if a.is_up else 'NO'}",
+            ]
+            if a.element_args:
+                lines.append(f"  element_args: {a.element_args}")
+            if a.section_tag is not None:
+                lines.append(f"  Section tag: {a.section_tag}")
+            if a.transf_tag is not None:
+                lines.append(f"  geomTransf tag: {a.transf_tag}")
+            if a.integration_tag is not None:
+                lines.append(f"  beamIntegration tag: {a.integration_tag}")
+
+        try:
+            model = self.doc.mesh_models.get(ref[0]) if ref else None
+            if model is not None and assignments:
+                from gcs.core.opensees_flow import OpenSeesFlow
+                tcl_all = OpenSeesFlow._render_elements(manager, model)
+                selected_ids = {int(x) for a in assignments for x in a.element_ids}
+                tcl_lines = [
+                    line for line in tcl_all.splitlines()
+                    if line.startswith("element ")
+                    and any(f" {eid} " in line for eid in selected_ids)
+                ]
+                if tcl_lines:
+                    lines += ["", "TCL ELEMENTI DELL'ENTITÀ:", *tcl_lines]
+        except Exception as exc:
+            lines += ["", f"Tcl preview non disponibile: {exc}"]
+
+        groups = set(self._entity_groups(entity.id))
+        constraints = []
+        for c0 in manager.constraints:
+            if entity.id in c0.entity_ids or groups.intersection(c0.group_names):
+                constraints.append(
+                    f"fix {c0.cid} · {c0.name} · DOF {c0.dof_flags(manager.ndf)}")
+        for eq in manager.equaldofs:
+            if (eq.master_entity_id == entity.id or eq.slave_entity_id == entity.id
+                    or (eq.master_group and eq.master_group in groups)
+                    or (eq.slave_group and eq.slave_group in groups)):
+                constraints.append(
+                    f"equalDOF {eq.eid} · {eq.name} · DOF {eq.dofs}")
+        if constraints:
+            lines += ["", "VINCOLI:", *constraints]
+
+        loads = []
+        for ld in manager.loads:
+            if entity.id in ld.entity_ids or groups.intersection(ld.group_names):
+                loads.append(
+                    f"load {ld.lid} · {ld.name} · "
+                    f"F=({ld.fx:g},{ld.fy:g},{ld.fz:g}) · pattern={ld.pattern_tag}")
+        if loads:
+            lines += ["", "LOAD:", *loads]
+
+        try:
+            from gcs.core.opensees_flow import OpenSeesFlow
+            model = self.doc.mesh_models.get(ref[0]) if ref else None
+            groups0 = set(self._entity_groups(entity.id))
+            tcl_related = []
+
+            # Elementi: estrazione delle righe Tcl esatte associate alla proprietà FEM.
+            if model is not None and assignments:
+                tcl_all = OpenSeesFlow._render_elements(manager, model)
+                selected_ids = {int(x) for a in assignments for x in a.element_ids}
+                tcl_related.extend(
+                    line for line in tcl_all.splitlines()
+                    if line.startswith("element ")
+                    and any(f" {eid} " in line for eid in selected_ids)
+                )
+
+            # Vincoli/EqualDOF: usa gli stessi renderer del workflow.
+            if model is not None:
+                for c0 in manager.constraints:
+                    if entity.id in c0.entity_ids or groups0.intersection(c0.group_names):
+                        tcl_related.append(OpenSeesFlow._render_constraint(manager, c0, model))
+                for eq in manager.equaldofs:
+                    if (eq.master_entity_id == entity.id or eq.slave_entity_id == entity.id
+                            or (eq.master_group and eq.master_group in groups0)
+                            or (eq.slave_group and eq.slave_group in groups0)):
+                        tcl_related.append(OpenSeesFlow._render_equal_dof(manager, eq, model))
+
+            # Carichi nodali: documenta i nodi mesh coinvolti dall'entità.
+            if model is not None:
+                for ld in manager.loads:
+                    if entity.id in ld.entity_ids or groups0.intersection(ld.group_names):
+                        nodes = manager.resolve_load_nodes(ld, model)
+                        if nodes:
+                            vals = [ld.fx, ld.fy, ld.fz][:manager.ndf]
+                            tcl_related.append(
+                                f"# LOAD '{ld.name}' pattern {ld.pattern_tag} → nodi {nodes}")
+                            tcl_related.extend(
+                                f"load {nid} " + " ".join(f"{v/len(nodes):.10g}" for v in vals) + ";"
+                                for nid in nodes
+                            )
+
+            if tcl_related:
+                lines += ["", "TCL ASSOCIATO ALL'ENTITÀ:", *tcl_related]
+
+            # Fasi realmente pertinenti all'entità: definizione FEM e condizioni/stage
+            # legati al materiale o ai target dell'entità.
+            flow = manager.flow
+            flow.sync_from_manager(manager, model)
+            material_tags = {int(a.material_tag) for a in assignments}
+            related_phases = []
+            for phase in flow.phases:
+                relevant = phase.phase_id == 0 and bool(assignments or ref)
+                relevant = relevant or any(
+                    int(s.stage_id) == int(phase.phase_id)
+                    and int(s.mat_tag) in material_tags
+                    for s in manager.stages
+                )
+                relevant = relevant or (
+                    phase.phase_id > 0 and (
+                        any(entity.id in c0.entity_ids or groups0.intersection(c0.group_names)
+                            for c0 in manager.constraints)
+                        or any(entity.id in ld.entity_ids or groups0.intersection(ld.group_names)
+                               for ld in manager.loads)
+                    )
+                )
+                if relevant:
+                    related_phases.append(
+                        f"  Phase {phase.phase_id:02d} · {phase.name}")
+            if related_phases:
+                lines += ["", "FASI RILEVANTI:", *related_phases]
+
+        except Exception as exc:
+            lines += ["", f"Preview Tcl non disponibile: {exc}"]
+
+        self.fem_details.setPlainText("\n".join(lines))
+
+    def _mesh_element_ids(self, entity):
+        ref = entity.meta.get("mesh_ref")
+        if not ref:
+            return []
+        model = self.doc.mesh_models.get(ref[0])
+        if model is None:
+            return []
+        block = model.blocks.get((int(ref[1]), int(ref[2])))
+        return sorted(int(x) for x in (block.element_ids if block else []))
+
     # ---------------------------------------------------------------- eventi
+    def _assignment_from_item(self, item):
+        """Risolvi l'assegnazione FEM rappresentata da un nodo dell'albero."""
+        if item.data(0, Qt.UserRole + 5) != "assignment":
+            return None
+        eid = item.data(0, Qt.UserRole)
+        model_name = item.data(0, Qt.UserRole + 6)
+        element_ids = {int(x) for x in (item.data(0, Qt.UserRole + 7) or [])}
+        manager = getattr(self.doc, "opensees", None)
+        if eid is None or manager is None:
+            return None
+        candidates = [
+            a for a in manager.element_assignments
+            if int(a.entity_id) == int(eid)
+            and (not model_name or a.model_name == str(model_name))
+        ]
+        return next(
+            (a for a in candidates if set(a.element_ids) == element_ids),
+            candidates[0] if len(candidates) == 1 else None,
+        )
+
+    def _open_fem_assignment_editor(self, assignment):
+        if assignment is None:
+            return
+        from .dialogs import OpenSeesFEMDialog
+        dlg = OpenSeesFEMDialog(
+            self.doc,
+            parent=self,
+            focus_entity_id=assignment.entity_id,
+            focus_assignment=assignment,
+        )
+        if dlg.exec():
+            self.doc.opensees.refresh_entity_metadata()
+            self.doc.notify("opensees_condition_added",
+                            {"type": "element_assignment_edited",
+                             "entity_id": assignment.entity_id})
+            self.refresh()
+            self.viewer.redraw_all(fit=False)
+
     def _on_double(self, item, col):
+        assignment = self._assignment_from_item(item)
+        if assignment is not None:
+            self._open_fem_assignment_editor(assignment)
+            return
+
         eid = item.data(0, Qt.UserRole)
         if eid is not None:
             self.doc.set_selection([eid])
+            assignment_ids = item.data(0, Qt.UserRole + 7) or []
+            model_name = item.data(0, Qt.UserRole + 6)
+            if assignment_ids and model_name:
+                model = self.doc.mesh_models.get(str(model_name))
+                if model is not None:
+                    model.sel_elements = {int(x) for x in assignment_ids}
+                    model.sel_nodes = model.nodes_of_elements(model.sel_elements)
+                    model.sel_blocks = {
+                        model.block_of_element(x)
+                        for x in model.sel_elements
+                        if model.block_of_element(x) is not None
+                    }
             self.viewer.highlight_selection()
             return
         model_name = item.data(0, Qt.UserRole + 2)
@@ -160,8 +687,32 @@ class EntityTree(QWidget):
         if eid is not None:
             e = self.doc.get(eid)
             if e:
-                e.visible = (item.checkState(0) == Qt.Checked)
+                visible = item.checkState(0) == Qt.Checked
+                e.set_visible(visible)
                 self.viewer.redraw_all(fit=False)
+            return
+        gname = item.data(0, Qt.UserRole + 1)
+        if gname:
+            group = self.doc.groups.groups.get(str(gname))
+            if group:
+                self._set_visibility_for_entities(group.member_ids, item.checkState(0) == Qt.Checked)
+
+    def _set_visibility_for_entities(self, entity_ids, visible):
+        changed = 0
+        for eid in entity_ids:
+            e = self.doc.entities.get(int(eid))
+            if e is not None:
+                e.set_visible(visible)
+                changed += 1
+        self.viewer.redraw_all(fit=False)
+        self.refresh()
+        return changed
+
+    def _toggle_all_visibility(self, visible):
+        changed = self._set_visibility_for_entities(self.doc.entities.keys(), visible)
+        win = self.window()
+        if hasattr(win, "_log"):
+            win._log(f"Entità CAD: {'visibili' if visible else 'nascoste'} ({changed})")
 
     def _menu_contesto(self, pos):
         item = self.tree.itemAt(pos)
@@ -169,7 +720,21 @@ class EntityTree(QWidget):
         win = self.window()
 
         if item is not None:
+            assignment = self._assignment_from_item(item)
+            if assignment is not None:
+                menu.addAction(
+                    "Modifica assegnazione FEM…",
+                    lambda a=assignment: self._open_fem_assignment_editor(a))
+                menu.addAction(
+                    "Seleziona elementi FEM",
+                    lambda a=assignment: self._select_fem_assignment(a))
+                menu.addSeparator()
+
             eid = item.data(0, Qt.UserRole)
+            if eid is not None:
+                menu.addAction("Mostra entità", lambda eid=eid: self._set_visibility_for_entities([eid], True))
+                menu.addAction("Nascondi entità", lambda eid=eid: self._set_visibility_for_entities([eid], False))
+                menu.addSeparator()
             gname = item.data(0, Qt.UserRole + 1)
             if gname is None and item.text(1) == "Gruppo":
                 gname = item.text(0)
@@ -240,6 +805,9 @@ class EntityTree(QWidget):
 
         menu.addSeparator()
         menu.addAction("Aggiorna vista", self.viewer.redraw_all)
+        if item is None:
+            menu.addAction("Mostra tutte le entità", lambda: self._toggle_all_visibility(True))
+            menu.addAction("Nascondi tutte le entità", lambda: self._toggle_all_visibility(False))
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _open_entity_props(self, ent):
@@ -351,6 +919,21 @@ class EntityTree(QWidget):
                 QMessageBox.information(self, "Esporta Nodi Gruppo", f"Nodi salvati in:\n{path}")
             except Exception as ex:
                 QMessageBox.critical(self, "Errore Export", str(ex))
+
+    def _select_fem_assignment(self, assignment):
+        entity_id = int(assignment.entity_id)
+        self.doc.set_selection([entity_id])
+        model = self.doc.mesh_models.get(assignment.model_name)
+        if model is not None:
+            model.sel_elements = {int(x) for x in assignment.element_ids}
+            model.sel_nodes = model.nodes_of_elements(model.sel_elements)
+            model.sel_blocks = {
+                model.block_of_element(x)
+                for x in model.sel_elements
+                if model.block_of_element(x) is not None
+            }
+        self.viewer.highlight_selection()
+        self.refresh()
 
     def _select(self, eid):
         self.doc.set_selection([eid])

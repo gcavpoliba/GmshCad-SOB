@@ -332,16 +332,20 @@ class MainWindow(QMainWindow):
         m.addAction(self._act("Mostra/Nascondi griglia quadrettata",
                               self.act_toggle_grid, "G"))
         m.addSeparator()
-        # --- Toggle di visualizzazione OpenSees ---
-        m_vis = m.addMenu("Visualizzazione OpenSees")
-        self._act_node_labels = self._act("Etichette nodi (tag OpenSees)",
+        # --- Visualizzazione: mesh e simbologia OpenSees ---
+        m_vis = m.addMenu("Visualizzazione Mesh / OpenSees")
+        self._act_node_labels = self._act("Etichette nodi mesh",
                                             self.act_toggle_node_labels)
         self._act_node_labels.setCheckable(True)
         m_vis.addAction(self._act_node_labels)
-        self._act_elem_labels = self._act("Etichette elementi (E<id>)",
+        self._act_elem_labels = self._act("Etichette elementi mesh (M<id>)",
                                             self.act_toggle_element_labels)
         self._act_elem_labels.setCheckable(True)
         m_vis.addAction(self._act_elem_labels)
+        m_vis.addSeparator()
+        m_vis.addAction(self._act("Mostra tutte le entità CAD", lambda: self._set_all_cad_visibility(True)))
+        m_vis.addAction(self._act("Nascondi tutte le entità CAD", lambda: self._set_all_cad_visibility(False)))
+        m_vis.addAction(self._act("Inverti visibilità entità CAD", self._invert_cad_visibility))
         self._act_load_arrows = self._act("Frecce carichi nodali",
                                             self.act_toggle_load_arrows)
         self._act_load_arrows.setCheckable(True)
@@ -611,6 +615,20 @@ class MainWindow(QMainWindow):
             self._log(f"Errore bridge fasi: {exc}")
 
     # --- Toggle visualizzazioni OpenSees ---
+    def _set_all_cad_visibility(self, visible):
+        for entity in self.doc.entities.values():
+            entity.set_visible(visible)
+        self.viewer.redraw_all(fit=False)
+        self.tree_panel.refresh()
+        self._log(f"Visibilità CAD: {'ON' if visible else 'OFF'}")
+
+    def _invert_cad_visibility(self):
+        for entity in self.doc.entities.values():
+            entity.set_visible(not entity.visible)
+        self.viewer.redraw_all(fit=False)
+        self.tree_panel.refresh()
+        self._log("Visibilità CAD: invertita")
+
     def act_toggle_node_labels(self):
         if hasattr(self.viewer, "toggle_node_labels"):
             on = self.viewer.toggle_node_labels()

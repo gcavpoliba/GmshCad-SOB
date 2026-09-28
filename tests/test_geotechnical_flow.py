@@ -97,3 +97,13 @@ def test_explicit_standard_20_node_brick_is_allowed():
         7, "mesh", [11], 17, 2, element_command="20NodeBrick"
     )
     assert assignment.effective_command() == "20NodeBrick"
+
+
+def test_cad_entity_visibility_state():
+    from gcs.core.entities import Entity
+    e = Entity("surface", name="Terreno")
+    assert e.visibility_state == "ON"
+    e.set_visible(False)
+    assert e.visibility_state == "OFF"
+    e.set_visible(True)
+    assert e.visible is True
